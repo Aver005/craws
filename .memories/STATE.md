@@ -90,7 +90,9 @@ channel) ~106 ms could use an encode LUT.
 | `cargo test --workspace` | **71 passing** (9 domain + 40 engine + 5 codecs + 1+4 cli + 9 mcp-lib/session + 3 mcp-stdio) |
 | `cargo clippy --workspace --all-targets` | **0 warnings** |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
-| CI | `[DONE]` — `.github/workflows/{ci,dev-release}.yml` + `.gitlab-ci.yml` (mirror). CI gate: fmt·clippy `-D warnings`·build·test·bench-compile (win/linux), Tauri shell in its own job. Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** desktop installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
+| CI | `[DONE]` — **single** `.github/workflows/ci.yml` (staged, no 2nd workflow / no duplicated Build) + `.gitlab-ci.yml` (mirror, already one staged pipeline). Flow: PR / main → `gate` (clippy `-D warnings`·test·bench-compile, **Linux-only**) + `app` (Tauri shell); develop → gate+app → `release-build` (3 OS) → `publish`. **fmt NOT gated.** Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
+| Pre-push gate | `[DONE]` — `.githooks/pre-push` (linter·tests·checker, incl. shell build); `git config core.hooksPath .githooks` set; `scripts/install-hooks.sh` re-arms on clone. Bypass: `git push --no-verify` |
+| Tauri icons | `[DONE]` — full set in `crates/craws-app/icons/` (placeholder = amber claw marks, `scratchpad/gen_icons.py`); `bundle.icon` wired. Real crab mascot TODO |
 
 ## CURRENT FOCUS
 

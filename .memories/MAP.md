@@ -44,6 +44,14 @@ crates/craws-cli/               port #1
   tests/e2e.rs                  drives the real binary: happy path, invalid pipeline, quiet, ops
   examples/gen_sample.rs        synthetic 24MP "photo" generator
 
+skills/craws-mcp/               Agent Skill: how to drive the craws MCP (SKILL.md + references/
+  SKILL.md                      mental model (immutable handles → chain image_id), coordinate
+                                sourcing (Playwright boundingBox + DPR), annotation/composition
+                                recipes, pitfalls, worked example
+  references/tools.md           exhaustive per-tool reference (params, defaults, returns, errors)
+  references/cookbook.md        Playwright→craws→Outline pipeline, redaction, before/after, batch
+  (validated: with-skill A/B prevents the stale-handle bug the baseline fell into)
+
 crates/craws-mcp/               port #2: MCP server (rmcp 2.1, stdio, protocol 2024-11-05)
   src/session.rs                Session — engine-facing core, NO mcp types (unit-testable):
                                 open_bytes/open_path, apply(OpSpec)→new handle, info, export; immutable

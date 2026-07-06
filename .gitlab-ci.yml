@@ -1,7 +1,8 @@
 # CI/CD for craws (GitLab mirror of .github/workflows/*).
 #
-# `test` stage — the BLAZING verification gate: rustfmt, clippy with
-# `-D warnings` (0 warnings, per .memories/INDEX.md §0), build + test. The
+# `test` stage — the BLAZING verification gate: clippy with `-D warnings`
+# (0 warnings, per .memories/INDEX.md §0), build + test. (rustfmt is not
+# gated — owner's call.) The
 # Tauri shell (craws-app) is excluded from the fast job; its own build is
 # exercised by the `build:linux` bundling below.
 #
@@ -80,9 +81,8 @@ test:core:
   variables:
     RUSTFLAGS: "-D warnings"
   before_script:
-    - rustup component add clippy rustfmt
+    - rustup component add clippy
   script:
-    - cargo fmt --all --check
     - cargo clippy --workspace --exclude craws-app --all-targets --locked -- -D warnings
     - cargo build --workspace --exclude craws-app --locked
     - cargo test --workspace --exclude craws-app --locked

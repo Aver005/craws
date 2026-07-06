@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# craws pre-push gate — blocks `git push` unless the BLAZING checks pass.
+#
+# Three gates (fmt is intentionally NOT one of them — owner's call):
+#   1. linter   — cargo clippy, 0 warnings
+#   2. tests    — cargo test
+#   3. checker  — cargo build, incl. the Tauri shell (this is the gate that
+#                 catches the "missing icon / shell won't compile" class of
+#                 bug) + the frontend TypeScript check
+#
+# Installed via `git config core.hooksPath .githooks` (see scripts/install-hooks.sh).
+# Escape hatches:
+#   git push --no-verify        — skip the whole gate
+#   CRAWS_SKIP_APP=1 git push    — skip only the Tauri-shell/frontend part
+set -uo pipefail
+
+# Run from the repo root regardless of where git invoked us.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+bold=$'\033[1m'; red=$'\033[31m'; grn=$'\033[32m'; ylw=$'\033[33m'; dim=$'\033[2m'; rst=$'\033[0m'
+
+fail() {
+  printf '\n%b✖ pre-push blocked: %s failed.%b\n' "$red$bold" "$1" "$rst" >&2
+  printf '%b  fix it, or bypass with %bgit push --no-verify%b\n' "$dim" "$rst$dim" "$rst" >&2
+  exit 1
+}
+
+CORE=(--workspace --exclude craws-app --locked)
+
+printf '%b━━ craws pre-push gate ━━%b\n' "$bold" "$rst" >&2
+
+# 1. Linter -----------------------------------------------------------------
+printf '%b▶ 1/3 linter  — cargo clippy (0 warnings)%b\n' "$bold" "$rst" >&2
+cargo clippy "${CORE[@]}" --all-targets -- -D warnings || fail "clippy"
+
+# 2. Tests ------------------------------------------------------------------
+printf '%b▶ 2/3 tests   — cargo test%b\n' "$bold" "$rst" >&2
+cargo test "${CORE[@]}" || fail "cargo test"
+
+# 3. Checker ----------------------------------------------------------------
+printf '%b▶ 3/3 checker — cargo build + Tauri shell%b\n' "$bold" "$rst" >&2
+cargo build "${CORE[@]}" || fail "cargo build (core)"
+
+if [ "${CRAWS_SKIP_APP:-0}" = "1" ]; then
+  printf '%b  ↷ skipping Tauri shell (CRAWS_SKIP_APP=1)%b\n' "$ylw" "$rst" >&2
+elif command -v bun >/dev/null 2>&1 && [ -d app/node_modules ]; then
+  # tsc FIRST — vite/esbuild strips types without checking them, so the real
+  # type gate is `bun run check`; run it before the build produces app/dist.
+  ( cd app && bun run check ) || fail "frontend typecheck (bun run check)"
+  ( cd app && bun run build ) || fail "frontend build (bun run build)"
+  # Then compile craws-app → runs generate_context! (the icon/asset gate),
+  # embedding the freshly built app/dist.
+  cargo build -p craws-app --locked || fail "cargo build -p craws-app"
+else
+  printf '%b  ↷ bun/app deps not found — skipping Tauri shell check (CI still covers it)%b\n' "$ylw" "$rst" >&2
+fi
+
+printf '\n%b✔ all gates passed — pushing.%b\n' "$grn$bold" "$rst" >&2
+exit 0
