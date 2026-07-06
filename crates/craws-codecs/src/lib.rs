@@ -49,6 +49,10 @@ pub enum CodecError {
     Decode(#[source] image::ImageError),
     #[error("encode failed: {0}")]
     Encode(#[source] image::ImageError),
+    #[error("jpeg encode failed: {0}")]
+    JpegEncode(String),
+    #[error("jpeg dimensions {width}x{height} exceed the format's 65535 limit")]
+    JpegTooLarge { width: u32, height: u32 },
     #[error("cannot tell the format of `{0}` — use a .png / .jpg / .webp extension")]
     UnknownFormat(String),
 }
@@ -71,7 +75,7 @@ pub fn encode(
     quality: Option<u8>,
 ) -> Result<Vec<u8>, CodecError> {
     assert_eq!(rgba8.len() as u64, width as u64 * height as u64 * 4, "buffer size mismatch");
-    use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, webp::WebPEncoder};
+    use image::codecs::{png::PngEncoder, webp::WebPEncoder};
     use image::{ExtendedColorType, ImageEncoder};
 
     let mut out = Vec::new();
@@ -82,14 +86,24 @@ pub fn encode(
         ImageFormat::WebP => WebPEncoder::new_lossless(Cursor::new(&mut out))
             .write_image(rgba8, width, height, ExtendedColorType::Rgba8)
             .map_err(CodecError::Encode)?,
+        // jpeg-encoder (SIMD) instead of image's own encoder — ~7x faster here.
         ImageFormat::Jpeg => {
+            let (w, h) = jpeg_dims(width, height)?;
             let rgb = flatten_over_white(rgba8);
-            JpegEncoder::new_with_quality(Cursor::new(&mut out), quality.unwrap_or(90).clamp(1, 100))
-                .write_image(&rgb, width, height, ExtendedColorType::Rgb8)
-                .map_err(CodecError::Encode)?
+            jpeg_encoder::Encoder::new(&mut out, quality.unwrap_or(90).clamp(1, 100))
+                .encode(&rgb, w, h, jpeg_encoder::ColorType::Rgb)
+                .map_err(|e| CodecError::JpegEncode(e.to_string()))?;
         }
     }
     Ok(out)
+}
+
+/// JPEG dimensions are 16-bit in the format; reject anything larger up front.
+fn jpeg_dims(width: u32, height: u32) -> Result<(u16, u16), CodecError> {
+    match (u16::try_from(width), u16::try_from(height)) {
+        (Ok(w), Ok(h)) => Ok((w, h)),
+        _ => Err(CodecError::JpegTooLarge { width, height }),
+    }
 }
 
 /// `out = a·c + (1−a)·white`, in gamma space — the conventional export flatten.

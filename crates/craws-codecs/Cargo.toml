@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 image = { workspace = true, features = ["png", "jpeg", "webp"] }
+jpeg-encoder = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

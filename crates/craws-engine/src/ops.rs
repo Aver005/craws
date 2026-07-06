@@ -8,9 +8,9 @@
 //!   its hashing to only the overlapped source tiles is a known improvement.)
 
 use crate::hash::ContentHash;
+use crate::resample::{self, Contribs};
 use crate::tile::{grid_dims, tile_dims, Tile, TileRef, TiledImage, TILE_SIZE};
 use craws_domain::{Filter, Rect, Size};
-use image::imageops::FilterType;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -79,8 +79,9 @@ pub fn crop(
 /// Whole-image resample. Runs on premultiplied linear f32 — the only correct
 /// place to resample (no dark fringing, no gamma-space bleed).
 ///
-/// M0 goes through a flat buffer (`image::imageops`); a streaming tile-band
-/// resampler is a planned BLAZING upgrade for huge inputs.
+/// Separable two-pass with precomputed, reused weights, both passes rayon-
+/// parallel (`crate::resample`). The horizontal pass reads source rows straight
+/// from the tile grid, so there is no giant intermediate flat copy of the input.
 pub fn resize(
     input: &TiledImage,
     target: Size,
@@ -88,17 +89,15 @@ pub fn resize(
     tile_hash: &(dyn Fn(u32) -> ContentHash + Sync),
 ) -> TiledImage {
     let src = input.size();
-    let buf: image::ImageBuffer<image::Rgba<f32>, Vec<f32>> =
-        image::ImageBuffer::from_raw(src.width, src.height, input.to_flat_f32())
-            .expect("flat buffer matches dimensions");
-    let ft = match filter {
-        Filter::Nearest => FilterType::Nearest,
-        Filter::Bilinear => FilterType::Triangle,
-        Filter::CatmullRom => FilterType::CatmullRom,
-        Filter::Lanczos3 => FilterType::Lanczos3,
-    };
-    let out = image::imageops::resize(&buf, target.width, target.height, ft);
-    TiledImage::from_flat_f32(target, out.as_raw(), tile_hash)
+    let cx = Contribs::new(src.width, target.width, filter);
+    let cy = Contribs::new(src.height, target.height, filter);
+    // horizontal: gather each source row from tiles → intermediate (out_w × in_h)
+    let inter = resample::horizontal(&cx, src.width, src.height, |y, dst| {
+        input.copy_row_into(y, dst);
+    });
+    // vertical: intermediate → final flat (out_w × out_h)
+    let out = resample::vertical(&cy, &inter, target.width);
+    TiledImage::from_flat_f32(target, &out, tile_hash)
 }
 
 #[cfg(test)]

@@ -1,12 +1,14 @@
 # STATE
 > Live project snapshot. Update on every meaningful change.
-> Last updated: 2026-07-06 — **M0 + M1 (MCP) + M2 spike all shipped**. craws-mcp on rmcp drives the
-> engine over stdio; verified with a real JSON-RPC batch and wired into pooprusteek. 50 tests, clippy 0.
+> Last updated: 2026-07-06 — **M0 + M1 + M2 shipped; first BLAZING-debt pass done**: own separable
+> resampler (resize 323→54 ms, 6×, drops `image` dep from engine) + SIMD jpeg encoder (910→375 ms,
+> 2.4×). 54 tests, clippy 0.
 
 ## SNAPSHOT
 
 - **M0 core is live.** `craws run pipeline.json --in a.png --out b.webp` end-to-end: 24MP / 4-step
-  pipeline in ~556 ms. Warm slider tweak on a 24MP chain = **11.8 ms**; fully-cached op = **85 µs**.
+  pipeline now **~336 ms** (was 556; resize step 307→49 ms). Warm slider tweak on a 24MP chain =
+  **11.8 ms**; fully-cached op = **85 µs**.
 - **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). Tools:
   `open_image` `resize` `crop` `exposure` `grayscale` `image_info` `export`. Image-handle session:
   each op returns a NEW immutable `image_id` (mirrors engine tiles), shared engine cache across the
@@ -49,18 +51,20 @@ optimistic). Design de-risked.
 
 | What | Time |
 |---|---|
-| CLI end-to-end: PNG decode → 4-step pipeline → WebP write | 556 ms |
+| CLI end-to-end: PNG decode → 4-step pipeline → WebP write | **336 ms** (was 556) |
 | ingest sRGB8 → linear f32 tiles | 45–64 ms |
 | export tiles → sRGB8 | ~106 ms |
 | exposure over 24MP, cold / **cached** | 49 ms / **85 µs** |
-| resize 6000→1920 Lanczos3, cold | ~303 ms |
-| chain (resize+exposure+crop+gray), cold / **slider-tweak warm** | ~335 ms / **11.8 ms (~85 fps)** |
+| resize 6000→1920 Lanczos3, cold | **54 ms** (was 323; own resampler, 6×) |
+| chain (resize+exposure+crop+gray), cold / **slider-tweak warm** | ~85 ms / **11.8 ms** |
 | decode jpeg / png (24MP) | 128 ms / 157 ms |
-| encode jpeg q90 | **893 ms** ⚠️ |
+| encode jpeg q90 | **375 ms** (was 910; jpeg-encoder SIMD, 2.4×) |
 | encode png | 182 ms |
 
-`[BUG]`-grade perf note: jpeg **encode** (image crate, single-threaded) is ~7× slower than decode —
-first BLAZING candidate (mozjpeg / jpeg-encoder / turbojpeg behind the same codecs API).
+BLAZING-debt pass #1 (2026-07-06): resize + jpeg both attacked and measured. Remaining candidates:
+jpeg encode is still single-threaded SIMD — batch parallelism belongs at the port level (encode many
+files concurrently) rather than inside one image; png encode 182 ms; export convert (`powf` per
+channel) ~106 ms could use an encode LUT.
 
 ## DECISIONS LOG
 
@@ -79,7 +83,7 @@ first BLAZING candidate (mozjpeg / jpeg-encoder / turbojpeg behind the same code
 | Check | Status |
 |-------|--------|
 | `cargo build --workspace` | Passes |
-| `cargo test --workspace` | **50 passing** (7 domain + 26 engine + 5 codecs + 1+4 cli + 5 mcp-session + 2 mcp-stdio) |
+| `cargo test --workspace` | **54 passing** (7 domain + 30 engine + 5 codecs + 1+4 cli + 5 mcp-session + 2 mcp-stdio) |
 | `cargo clippy --workspace --all-targets` | **0 warnings** |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
 | CI | `[TODO]` (mirror pooprusteek's build+test win/linux) |
@@ -92,4 +96,6 @@ M0, M1, M2-spike all done. Next candidates (owner's call):
 2. **Broaden M1**: more ops as tools (rotate/flip/blur/brightness-contrast), a `run_pipeline` tool
    (whole JSON pipeline in one call), batch-over-folder helper. Watermark/overlay op needs a new
    compositing op first (no text/overlay op exists yet — deferred from the original demo idea).
-3. **BLAZING debt**: jpeg encode 893 ms (swap encoder behind codecs API); streaming tile-band resize.
+3. **BLAZING debt** (pass #1 done — resize 6× + jpeg 2.4×): remaining — port-level batch parallelism
+   (encode many files at once), png encode, export `powf` LUT, and a fully-streaming (no intermediate
+   flat) resampler for images that dwarf RAM.

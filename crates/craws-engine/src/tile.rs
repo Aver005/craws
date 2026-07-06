@@ -198,6 +198,20 @@ impl TiledImage {
         Self::new(size, tiles)
     }
 
+    /// Copy image row `y` (row-major RGBA, `width*4` f32) into `dst`.
+    /// Used by the resampler to stream rows without a full flat buffer.
+    pub fn copy_row_into(&self, y: u32, dst: &mut [f32]) {
+        debug_assert_eq!(dst.len(), self.size.width as usize * 4);
+        let trow = y / TILE_SIZE;
+        let ty = (y % TILE_SIZE) as usize;
+        for col in 0..self.cols {
+            let t = &self.tile_at(col, trow).tile;
+            let tw = t.width as usize;
+            dst[(col * TILE_SIZE) as usize * 4..][..tw * 4]
+                .copy_from_slice(&t.px[ty * tw * 4..][..tw * 4]);
+        }
+    }
+
     /// Read one pixel (linear premultiplied). Debug/test/picker helper — not a hot path.
     pub fn pixel(&self, x: u32, y: u32) -> [f32; 4] {
         assert!(x < self.size.width && y < self.size.height);

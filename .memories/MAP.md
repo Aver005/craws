@@ -18,12 +18,17 @@ crates/craws-engine/            the executor
                                 from/to sRGB8 (premultiply here), from/to flat f32, pixel()
   src/hash.rs                   ContentHash + Merkle derivation (src/pw/gl/glt domains)
   src/cache.rs                  TileCache: LRU by byte budget (HashMap + BTreeMap recency)
-  src/ops.rs                    kernels: exposure, grayscale, crop (row-run gather), resize (imageops)
+  src/ops.rs                    kernels: exposure, grayscale, crop (row-run gather), resize (→resample)
+  src/resample.rs               own separable resampler: Contribs (precomputed per-output weights,
+                                filter-scaled for downsampling), horizontal (streams rows from tiles,
+                                no full flat src copy) + vertical passes, both rayon-parallel.
+                                nearest/bilinear/catmull_rom/lanczos3. Engine has NO `image` dep.
   src/engine.rs                 Engine::run — validate → per-step hash/cache/compute → RunStats
   benches/engine.rs             24MP: convert, exposure cold/cached, resize, chain cold/slider-warm
 
-crates/craws-codecs/            format adapters (image crate: png/jpeg/webp)
-  src/lib.rs                    decode (sniffing), encode (jpeg flattens over white), ImageFormat
+crates/craws-codecs/            format adapters (image: png/jpeg-decode/webp; jpeg-encoder: jpeg-encode)
+  src/lib.rs                    decode (sniffing, image), encode: png/webp via image, jpeg via
+                                jpeg-encoder (SIMD, flattens over white, 16-bit dim guard), ImageFormat
   benches/codecs.rs             24MP decode/encode
 
 crates/craws-cli/               port #1
@@ -63,5 +68,6 @@ app/                            React front (Vite + TS + Tailwind 4 + WebGPU)
 ```
 
 ## PERF NUMBERS (24MP, release, owner's machine — see STATE for the table)
-M0 engine: warm slider-tweak 11.8 ms, cached op 85 µs, CLI end-to-end 556 ms.
+Engine: warm slider-tweak 11.8 ms, cached op 85 µs, CLI end-to-end 336 ms (was 556).
+Resize 6000→1920 lanczos3: 54 ms (was 323, own resampler). jpeg encode q90: 375 ms (was 910, SIMD).
 M2 bridge spike: pan/zoom 165 fps; authoritative slider 7.8 fps (bridge 104 ms); optimistic 165 fps.

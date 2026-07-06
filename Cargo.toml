@@ -20,8 +20,10 @@ thiserror = "2"
 anyhow = "1"
 blake3 = "1"
 rayon = "1"
-# default-features off everywhere: engine uses only buffers+imageops, codecs opt into formats
+# default-features off everywhere: codecs opt into formats
 image = { version = "0.25", default-features = false }
+# fast pure-Rust SIMD jpeg encoder (image's own encoder is ~7x slower than its decode)
+jpeg-encoder = { version = "0.7", features = ["simd"] }
 clap = { version = "4", features = ["derive"] }
 criterion = "0.5"
 tempfile = "3"

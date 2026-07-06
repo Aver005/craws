@@ -17,6 +17,7 @@ pub mod color;
 pub mod engine;
 pub mod hash;
 pub mod ops;
+pub mod resample;
 pub mod tile;
 
 pub use engine::{Engine, EngineError, NodeStat, RunStats, DEFAULT_CACHE_BYTES};
