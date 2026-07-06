@@ -4,6 +4,7 @@
 //! public automation contract (`craws run pipeline.json`), so changes here are
 //! format changes: bump [`Pipeline::CURRENT_VERSION`] and keep old versions parsing.
 
+use crate::color::Rgba8;
 use crate::geometry::{Rect, Size};
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,68 @@ pub enum OpSpec {
     Exposure { stops: f32 },
     /// Rec.709 relative-luminance grayscale (in linear light).
     Grayscale,
+
+    // ── annotation ops (single-input; draw onto the image, size unchanged) ──
+    /// Rectangle with optional fill, optional stroke, optional rounded corners.
+    DrawRect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        corner_radius: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill: Option<Rgba8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stroke: Option<Rgba8>,
+        #[serde(default = "default_stroke_width")]
+        stroke_width: f32,
+    },
+    /// Ellipse inscribed in the (x, y, width, height) box. Circle = equal w/h.
+    DrawEllipse {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill: Option<Rgba8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stroke: Option<Rgba8>,
+        #[serde(default = "default_stroke_width")]
+        stroke_width: f32,
+    },
+    /// Straight line segment.
+    DrawLine {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        color: Rgba8,
+        #[serde(default = "default_thickness")]
+        thickness: f32,
+    },
+    /// Arrow: a segment from (x1,y1) to (x2,y2) with a V-head at the second point.
+    DrawArrow {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        color: Rgba8,
+        #[serde(default = "default_thickness")]
+        thickness: f32,
+        #[serde(default = "default_head_length")]
+        head_length: f32,
+    },
+}
+
+fn default_stroke_width() -> f32 {
+    3.0
+}
+fn default_thickness() -> f32 {
+    3.0
+}
+fn default_head_length() -> f32 {
+    18.0
 }
 
 impl OpSpec {
@@ -49,6 +112,10 @@ impl OpSpec {
             OpSpec::Crop { .. } => "crop",
             OpSpec::Exposure { .. } => "exposure",
             OpSpec::Grayscale => "grayscale",
+            OpSpec::DrawRect { .. } => "draw_rect",
+            OpSpec::DrawEllipse { .. } => "draw_ellipse",
+            OpSpec::DrawLine { .. } => "draw_line",
+            OpSpec::DrawArrow { .. } => "draw_arrow",
         }
     }
 
@@ -89,7 +156,51 @@ impl OpSpec {
                 Ok(input)
             }
             OpSpec::Grayscale => Ok(input),
+
+            OpSpec::DrawRect { x, y, width, height, corner_radius, fill, stroke, stroke_width } => {
+                check_finite("draw_rect", &[x, y, width, height, corner_radius, stroke_width])?;
+                if width < 0.0 || height < 0.0 || corner_radius < 0.0 || stroke_width < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "draw_rect" });
+                }
+                if fill.is_none() && stroke.is_none() {
+                    return Err(PipelineError::NothingToDraw { op: "draw_rect" });
+                }
+                Ok(input)
+            }
+            OpSpec::DrawEllipse { x, y, width, height, fill, stroke, stroke_width } => {
+                check_finite("draw_ellipse", &[x, y, width, height, stroke_width])?;
+                if width < 0.0 || height < 0.0 || stroke_width < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "draw_ellipse" });
+                }
+                if fill.is_none() && stroke.is_none() {
+                    return Err(PipelineError::NothingToDraw { op: "draw_ellipse" });
+                }
+                Ok(input)
+            }
+            OpSpec::DrawLine { x1, y1, x2, y2, thickness, .. } => {
+                check_finite("draw_line", &[x1, y1, x2, y2, thickness])?;
+                if thickness < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "draw_line" });
+                }
+                Ok(input)
+            }
+            OpSpec::DrawArrow { x1, y1, x2, y2, thickness, head_length, .. } => {
+                check_finite("draw_arrow", &[x1, y1, x2, y2, thickness, head_length])?;
+                if thickness < 0.0 || head_length < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "draw_arrow" });
+                }
+                Ok(input)
+            }
         }
+    }
+}
+
+/// Reject non-finite geometry before it reaches the rasterizer.
+fn check_finite(op: &'static str, vals: &[f32]) -> Result<(), PipelineError> {
+    if vals.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err(PipelineError::NonFiniteParam { op, param: "geometry" })
     }
 }
 
@@ -144,6 +255,10 @@ pub enum PipelineError {
     CropOutOfBounds { rect: Rect, image: Size },
     #[error("{op}: parameter `{param}` must be finite")]
     NonFiniteParam { op: &'static str, param: &'static str },
+    #[error("{op}: dimensions and widths must be non-negative")]
+    NegativeParam { op: &'static str },
+    #[error("{op}: needs a fill or a stroke (both are absent)")]
+    NothingToDraw { op: &'static str },
     #[error("step {index}: {source}")]
     AtStep { index: usize, source: Box<PipelineError> },
 }
@@ -193,6 +308,49 @@ mod tests {
         // rounding, and the ≥1 clamp on extreme ratios
         let op = OpSpec::Resize { width: Some(1), height: None, filter: Filter::default() };
         assert_eq!(op.output_size(px(10000, 100)).unwrap(), px(1, 1));
+    }
+
+    #[test]
+    fn draw_ops_keep_size_and_validate() {
+        use crate::color::Rgba8;
+        let red = Rgba8::rgb(255, 0, 0);
+        // draw ops never change the image size
+        let ops = [
+            OpSpec::DrawRect { x: 1.0, y: 1.0, width: 10.0, height: 8.0, corner_radius: 2.0, fill: None, stroke: Some(red), stroke_width: 3.0 },
+            OpSpec::DrawEllipse { x: 0.0, y: 0.0, width: 20.0, height: 20.0, fill: Some(red), stroke: None, stroke_width: 3.0 },
+            OpSpec::DrawLine { x1: 0.0, y1: 0.0, x2: 5.0, y2: 5.0, color: red, thickness: 2.0 },
+            OpSpec::DrawArrow { x1: 0.0, y1: 0.0, x2: 9.0, y2: 0.0, color: red, thickness: 2.0, head_length: 6.0 },
+        ];
+        for op in ops {
+            assert_eq!(op.output_size(px(100, 80)).unwrap(), px(100, 80), "{}", op.name());
+        }
+
+        // a rect with neither fill nor stroke is nothing to draw
+        let empty = OpSpec::DrawRect { x: 0.0, y: 0.0, width: 5.0, height: 5.0, corner_radius: 0.0, fill: None, stroke: None, stroke_width: 3.0 };
+        assert!(matches!(empty.output_size(px(10, 10)), Err(PipelineError::NothingToDraw { .. })));
+
+        // non-finite geometry is rejected
+        let nan = OpSpec::DrawLine { x1: f32::NAN, y1: 0.0, x2: 1.0, y2: 1.0, color: red, thickness: 1.0 };
+        assert!(matches!(nan.output_size(px(10, 10)), Err(PipelineError::NonFiniteParam { .. })));
+    }
+
+    #[test]
+    fn draw_rect_json_shape() {
+        use crate::color::Rgba8;
+        // agent-authored JSON with a partial color (alpha defaults to 255)
+        let op: OpSpec = serde_json::from_str(
+            r#"{ "op": "draw_rect", "x": 10, "y": 20, "width": 100, "height": 50,
+                 "corner_radius": 8, "stroke": { "r": 255, "g": 0, "b": 0 } }"#,
+        )
+        .unwrap();
+        match op {
+            OpSpec::DrawRect { stroke: Some(c), stroke_width, fill, .. } => {
+                assert_eq!(c, Rgba8::new(255, 0, 0, 255), "alpha defaults to opaque");
+                assert_eq!(stroke_width, 3.0, "stroke_width defaults");
+                assert!(fill.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

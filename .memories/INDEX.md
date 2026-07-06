@@ -1,8 +1,9 @@
 # .memories INDEX
 > Agent entry point. If you were handed this project cold, START HERE. Last updated: 2026-07-06
-> (M0 engine+CLI, M1 MCP server (rmcp/stdio, wired into pooprusteek), M2 Tauri+React spike — ALL
-> shipped. BLAZING-debt pass #1: own resampler (resize 6×, no `image` dep in engine) + SIMD jpeg
-> (2.4×). 54 tests, clippy 0. Next: M3 editor, broaden M1, or more perf — owner's call).
+> (M0 engine+CLI, M1 MCP server wired into pooprusteek, M2 Tauri+React spike — ALL shipped.
+> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened: annotation (draw arrow/circle/box in
+> linear-light SDF) + composition (overlay + smart collage) — the doc-automation killer feature,
+> verified visually. 71 tests, clippy 0. Next: text-on-image, then owner's call).
 
 > `CLAUDE.md` at the repo root is the auto-loaded bridge into this folder for Claude Code.
 > Other agents must be told to read `.memories/INDEX.md` first.

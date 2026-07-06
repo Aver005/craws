@@ -14,6 +14,8 @@
 
 pub mod cache;
 pub mod color;
+pub mod compose;
+pub mod draw;
 pub mod engine;
 pub mod hash;
 pub mod ops;

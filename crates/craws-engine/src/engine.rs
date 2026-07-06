@@ -2,6 +2,7 @@
 //! computes only what's missing, and reports per-node stats.
 
 use crate::cache::TileCache;
+use crate::draw;
 use crate::hash::{self, ContentHash};
 use crate::ops;
 use crate::tile::{grid_dims, Tile, TileRef, TiledImage};
@@ -93,6 +94,27 @@ impl Engine {
                 OpSpec::Resize { filter, .. } => self.run_global(&cur, out_size, op, |img, hash_fn| {
                     ops::resize(img, out_size, filter, hash_fn)
                 }),
+                // annotation ops: same size, only bbox tiles recompute (inside draw)
+                OpSpec::DrawRect { x, y, width, height, corner_radius, fill, stroke, stroke_width } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        draw::rect(img, x, y, width, height, corner_radius, fill, stroke, stroke_width, hash_fn)
+                    })
+                }
+                OpSpec::DrawEllipse { x, y, width, height, fill, stroke, stroke_width } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        draw::ellipse(img, x, y, width, height, fill, stroke, stroke_width, hash_fn)
+                    })
+                }
+                OpSpec::DrawLine { x1, y1, x2, y2, color, thickness } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        draw::line(img, x1, y1, x2, y2, color, thickness, hash_fn)
+                    })
+                }
+                OpSpec::DrawArrow { x1, y1, x2, y2, color, thickness, head_length } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        draw::arrow(img, x1, y1, x2, y2, color, thickness, head_length, hash_fn)
+                    })
+                }
             };
             stats.nodes.push(NodeStat {
                 name: step.name(),

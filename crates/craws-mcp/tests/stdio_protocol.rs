@@ -124,7 +124,10 @@ fn handshake_lists_tools_and_runs_a_batch() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    for expected in ["open_image", "resize", "crop", "exposure", "grayscale", "image_info", "export"] {
+    for expected in [
+        "open_image", "resize", "crop", "exposure", "grayscale", "image_info", "export",
+        "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "overlay", "collage",
+    ] {
         assert!(names.contains(&expected), "missing tool {expected}; got {names:?}");
     }
     // schema sanity: resize declares image_id
@@ -167,6 +170,36 @@ fn handshake_lists_tools_and_runs_a_batch() {
     assert_eq!((decoded.width, decoded.height), (320, 200));
     let p = &decoded.rgba8[..4];
     assert!(p[0] == p[1] && p[1] == p[2], "exported image should be gray: {p:?}");
+}
+
+#[test]
+fn annotation_and_collage_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Client::spawn();
+    c.request("initialize", json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "t", "version": "0" } }));
+    c.notify("notifications/initialized");
+
+    // annotate a screenshot: arrow + circle (ellipse) + rounded rect, hex + named colors
+    let src = dir.path().join("shot.png");
+    sample_png(&src, 600, 400);
+    let id = c.call_ok("open_image", json!({ "path": src.to_str().unwrap() }))["image_id"].as_str().unwrap().to_string();
+    let id = c.call_ok("draw_rect", json!({ "image_id": id, "x": 40, "y": 40, "width": 200, "height": 120, "corner_radius": 12, "stroke": "#ff3030", "stroke_width": 5 }))["image_id"].as_str().unwrap().to_string();
+    let id = c.call_ok("draw_ellipse", json!({ "image_id": id, "x": 300, "y": 200, "width": 140, "height": 140, "stroke": "yellow", "stroke_width": 6 }))["image_id"].as_str().unwrap().to_string();
+    let id = c.call_ok("draw_arrow", json!({ "image_id": id, "x1": 120, "y1": 300, "x2": 300, "y2": 240, "color": "#00a0ff", "thickness": 6 }))["image_id"].as_str().unwrap().to_string();
+    let out = dir.path().join("annotated.png");
+    c.call_ok("export", json!({ "image_id": id, "path": out.to_str().unwrap() }));
+    let d = craws_codecs::decode(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!((d.width, d.height), (600, 400), "annotations keep image size");
+
+    // collage two shots
+    let a = c.call_ok("open_image", json!({ "path": src.to_str().unwrap() }))["image_id"].as_str().unwrap().to_string();
+    let b = c.call_ok("open_image", json!({ "path": src.to_str().unwrap() }))["image_id"].as_str().unwrap().to_string();
+    let coll = c.call_ok("collage", json!({ "image_ids": [a, b], "target_width": 900, "row_height": 220, "background": "#101010" }));
+    assert_eq!(coll["width"], 900, "collage fills target width");
+
+    // a bad color is a clean tool error, not a crash
+    let msg = c.call_expect_error("draw_line", json!({ "image_id": id, "x1": 0, "y1": 0, "x2": 10, "y2": 10, "color": "chartreuse" }));
+    assert!(msg.to_lowercase().contains("color"), "color error: {msg}");
 }
 
 #[test]

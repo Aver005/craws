@@ -8,8 +8,10 @@ README.md                       public pitch + usage
 
 crates/craws-domain/            ZERO-I/O core
   src/lib.rs                    re-exports
+  src/color.rs                  Rgba8 (straight-alpha sRGB; alpha defaults to 255 in JSON)
   src/geometry.rs               Size, Rect (overflow-safe fits_in)
-  src/pipeline.rs               Pipeline, OpSpec (serde `op`-tagged), Filter, validation → sizes
+  src/pipeline.rs               Pipeline, OpSpec (serde `op`-tagged: resize/crop/exposure/grayscale +
+                                draw_rect/ellipse/line/arrow), Filter, validation → sizes
 
 crates/craws-engine/            the executor
   src/lib.rs                    re-exports + engine invariants doc
@@ -23,6 +25,12 @@ crates/craws-engine/            the executor
                                 filter-scaled for downsampling), horizontal (streams rows from tiles,
                                 no full flat src copy) + vertical passes, both rayon-parallel.
                                 nearest/bilinear/catmull_rom/lanczos3. Engine has NO `image` dep.
+  src/draw.rs                   SDF vector rasterizer: rect (rounded, fill+stroke), ellipse, line,
+                                arrow (shaft+V-head); 1px AA coverage composited in LINEAR light;
+                                only bbox-overlapping tiles recompute. Paint = linear premul.
+  src/compose.rs                multi-input ops (outside the single-input Pipeline): overlay (paste
+                                image at x,y + opacity) + collage (justified-rows layout by aspect,
+                                each full row fills width) → called directly by the MCP session.
   src/engine.rs                 Engine::run — validate → per-step hash/cache/compute → RunStats
   benches/engine.rs             24MP: convert, exposure cold/cached, resize, chain cold/slider-warm
 
@@ -41,8 +49,9 @@ crates/craws-mcp/               port #2: MCP server (rmcp 2.1, stdio, protocol 2
                                 open_bytes/open_path, apply(OpSpec)→new handle, info, export; immutable
                                 image handles ("img-N"), shared Engine cache, SessionError
   src/lib.rs                    rmcp wrapper: Craws { session, tool_router }, #[tool_router]/#[tool]
-                                (open_image/resize/crop/exposure/grayscale/image_info/export),
-                                #[tool_handler(router = self.tool_router)], get_info (instructions);
+                                (13 tools: open/resize/crop/exposure/grayscale/info/export +
+                                draw_rect/ellipse/line/arrow + overlay/collage), parse_color
+                                (#hex/#RGB/names), #[tool_handler(router=self.tool_router)], get_info;
                                 results are JSON text (image parts get dropped by clients)
   src/main.rs                   bin `craws-mcp`: serve(stdio()); logs to STDERR only (stdout=protocol)
   tests/stdio_protocol.rs       spawns the real binary, full JSON-RPC handshake + batch + error paths

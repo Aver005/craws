@@ -1,0 +1,89 @@
+name: CI
+
+# The BLAZING verification gate (see .memories/INDEX.md §0 and CLAUDE.md).
+# A change is only "done" when all of this is green:
+#   cargo fmt --check · cargo clippy -D warnings (0 warnings) · build · test
+# plus the criterion benches must still compile (proof-over-vibes).
+#
+# The Tauri shell (craws-app) is split into its own job: it needs the Linux
+# webkit system deps and a prebuilt frontend (app/dist) before it will
+# compile, so the fast cross-OS jobs run `--workspace --exclude craws-app`
+# and the `app` job covers craws-app on its own. Union of the two = the whole
+# workspace under -D warnings.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build on any warning from rustc too, not just clippy.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  test:
+    name: Build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (workspace, minus the Tauri shell)
+        run: cargo build --workspace --exclude craws-app --locked
+      - name: Test
+        run: cargo test --workspace --exclude craws-app --locked
+      - name: Benches still compile
+        run: cargo bench --workspace --exclude craws-app --no-run --locked
+
+  clippy:
+    name: Clippy (0 warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy — the contract says zero warnings
+        run: cargo clippy --workspace --exclude craws-app --all-targets --locked -- -D warnings
+
+  app:
+    name: Tauri shell (clippy + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: Build the frontend (craws-app embeds app/dist at compile time)
+        working-directory: app
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Clippy the shell
+        run: cargo clippy -p craws-app --all-targets --locked -- -D warnings
+      - name: Build the shell
+        run: cargo build -p craws-app --locked

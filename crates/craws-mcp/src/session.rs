@@ -8,6 +8,7 @@
 //! batch-processing many similar images stays BLAZING.
 
 use craws_domain::{OpSpec, Pipeline, Size};
+use craws_engine::compose::{self, CollageOptions};
 use craws_engine::{hash, Engine, TiledImage};
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,6 +37,8 @@ pub enum SessionError {
     Pipeline(#[from] craws_domain::PipelineError),
     #[error("cannot tell the output format of `{0}` — use a .png / .jpg / .webp extension")]
     UnknownFormat(String),
+    #[error("collage needs at least one image")]
+    EmptyCollage,
 }
 
 pub struct Session {
@@ -113,6 +116,30 @@ impl Session {
                 craws_engine::EngineError::Pipeline(p) => SessionError::Pipeline(p),
             })?;
         Ok(self.insert(out))
+    }
+
+    /// Composite `top` onto `base` at `(x, y)` with `opacity` → new handle.
+    pub fn overlay(
+        &self,
+        base_id: &str,
+        top_id: &str,
+        x: i32,
+        y: i32,
+        opacity: f32,
+    ) -> Result<ImageRef, SessionError> {
+        let base = self.get(base_id)?;
+        let top = self.get(top_id)?;
+        Ok(self.insert(compose::overlay(&base, &top, x, y, opacity)))
+    }
+
+    /// Arrange several handles into a justified-rows collage → new handle.
+    pub fn collage(&self, ids: &[String], opts: CollageOptions) -> Result<ImageRef, SessionError> {
+        if ids.is_empty() {
+            return Err(SessionError::EmptyCollage);
+        }
+        let imgs = ids.iter().map(|id| self.get(id)).collect::<Result<Vec<_>, _>>()?;
+        let refs: Vec<&TiledImage> = imgs.iter().collect();
+        Ok(self.insert(compose::collage(&refs, opts)))
     }
 
     /// Dimensions of a handle without mutating anything.
@@ -216,6 +243,38 @@ mod tests {
         let d = craws_codecs::decode(&png).unwrap();
         let p = &d.rgba8[..4];
         assert!(p[0] == p[1] && p[1] == p[2], "expected gray, got {p:?}");
+    }
+
+    #[test]
+    fn overlay_and_collage_via_session() {
+        let s = Session::new();
+        let base = s.open_bytes(&sample_png(400, 300)).unwrap();
+        let top = s.open_bytes(&sample_png(120, 90)).unwrap();
+
+        let over = s.overlay(&base.id, &top.id, 20, 15, 0.8).unwrap();
+        assert_eq!((over.width, over.height), (400, 300), "overlay keeps base size");
+        assert_ne!(over.id, base.id);
+
+        let col = s
+            .collage(
+                &[base.id.clone(), top.id.clone()],
+                CollageOptions { target_width: 800, row_height: 200, gap: 10, background: craws_domain::Rgba8::rgb(0, 0, 0) },
+            )
+            .unwrap();
+        assert_eq!(col.width, 800, "collage fills the target width");
+        assert!(col.height > 0);
+
+        assert!(matches!(s.collage(&[], CollageOptions { target_width: 800, row_height: 200, gap: 10, background: craws_domain::Rgba8::rgb(0, 0, 0) }), Err(SessionError::EmptyCollage)));
+    }
+
+    #[test]
+    fn draw_ops_via_session_produce_new_handles() {
+        use craws_domain::Rgba8;
+        let s = Session::new();
+        let img = s.open_bytes(&sample_png(200, 200)).unwrap();
+        let r = s.apply(&img.id, OpSpec::DrawArrow { x1: 10.0, y1: 10.0, x2: 150.0, y2: 120.0, color: Rgba8::rgb(255, 0, 0), thickness: 4.0, head_length: 18.0 }).unwrap();
+        assert_eq!((r.width, r.height), (200, 200), "annotation keeps size");
+        assert_ne!(r.id, img.id);
     }
 
     #[test]

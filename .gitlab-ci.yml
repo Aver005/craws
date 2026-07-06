@@ -1,0 +1,278 @@
+# CI/CD for craws (GitLab mirror of .github/workflows/*).
+#
+# `test` stage — the BLAZING verification gate: rustfmt, clippy with
+# `-D warnings` (0 warnings, per .memories/INDEX.md §0), build + test. The
+# Tauri shell (craws-app) is excluded from the fast job; its own build is
+# exercised by the `build:linux` bundling below.
+#
+# Rolling "dev-build" release: on every push to `develop` that touches code
+# or build/CI config (the `changes:` allowlist below — GitLab's
+# `rules:changes` has no "ignore docs" negation, so this whitelists
+# code/config paths instead of blacklisting docs; keep it in sync with new
+# top-level source/config dirs), rebuild and move the `vX.Y.Z-dev` release
+# tag (X.Y.Z from the workspace Cargo.toml) to the new commit. Bumping the
+# version produces a new tag/release instead of overwriting the previous one.
+#
+# Each platform ships both CLI binaries (`craws` + `craws-mcp`) and a desktop
+# installer for the Tauri shell (deb+AppImage on Linux, nsis on Windows, dmg
+# on macOS). Installers are UNSIGNED dev builds.
+#
+# Requires a `GITLAB_TOKEN` CI/CD variable (project/group access token, `api`
+# scope) — used to delete the previous tag so it can be recreated on the new
+# commit. Release notes are rendered from `scripts/dev-release.template.md`
+# (shared with .github/workflows/dev-release.yml) via
+# `scripts/render-release-notes.sh`.
+#
+# Only the Linux leg runs on a default shared runner. Windows/macOS need
+# GitLab SaaS runners (`saas-windows-medium-amd64` / `saas-macos-medium-m1`,
+# paid compute minutes) and are `when: manual` + `allow_failure: true` so the
+# pipeline doesn't block on a runner that may not exist yet.
+
+stages:
+  - test
+  - prepare
+  - build
+  - release
+
+variables:
+  CARGO_TERM_COLOR: always
+
+.dev_build_rules: &dev_build_rules
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      changes:
+        - "crates/**/*"
+        - "app/**/*"
+        - "Cargo.toml"
+        - "Cargo.lock"
+        - "scripts/**/*"
+        - ".gitlab-ci.yml"
+
+.dev_build_rules_manual: &dev_build_rules_manual
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      changes:
+        - "crates/**/*"
+        - "app/**/*"
+        - "Cargo.toml"
+        - "Cargo.lock"
+        - "scripts/**/*"
+        - ".gitlab-ci.yml"
+      when: manual
+      allow_failure: true
+
+# Shared apt install for the Tauri shell's Linux system deps.
+.linux_tauri_deps: &linux_tauri_deps
+  - apt-get update -y
+  - >
+    apt-get install -y --no-install-recommends
+    libwebkit2gtk-4.1-dev build-essential curl wget file
+    libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+    patchelf libfuse2
+
+test:core:
+  stage: test
+  image: rust:1.91
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  variables:
+    RUSTFLAGS: "-D warnings"
+  before_script:
+    - rustup component add clippy rustfmt
+  script:
+    - cargo fmt --all --check
+    - cargo clippy --workspace --exclude craws-app --all-targets --locked -- -D warnings
+    - cargo build --workspace --exclude craws-app --locked
+    - cargo test --workspace --exclude craws-app --locked
+    - cargo bench --workspace --exclude craws-app --no-run --locked
+
+prepare:version:
+  stage: prepare
+  image: alpine:3.20
+  <<: *dev_build_rules
+  script:
+    - VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+    - echo "VERSION=$VERSION" >> version.env
+    - echo "RELEASE_TAG=v${VERSION}-dev" >> version.env
+  artifacts:
+    reports:
+      dotenv: version.env
+
+build:linux:
+  stage: build
+  image: rust:1.91
+  <<: *dev_build_rules
+  before_script:
+    - *linux_tauri_deps
+    - curl -fsSL https://bun.sh/install | bash
+    - export PATH="$HOME/.bun/bin:$PATH"
+    - cargo install tauri-cli --locked || true
+  script:
+    # CLI binaries: craws + craws-mcp
+    - cargo build --release --locked -p craws-cli -p craws-mcp
+    - mkdir -p dist stage
+    - cp target/release/craws target/release/craws-mcp stage/
+    - strip stage/craws stage/craws-mcp || true
+    - tar -C stage -czf dist/craws-linux-x86_64.tar.gz craws craws-mcp
+    # Desktop installer: the Tauri shell
+    - (cd app && bun install --frozen-lockfile && bun run build)
+    - (cd crates/craws-app && cargo tauri build --bundles deb,appimage)
+    - find target/release/bundle -type f \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} dist/ \;
+    - echo "RUST_VERSION=$(rustc --version)" >> build.env
+  artifacts:
+    paths:
+      - dist/
+    reports:
+      dotenv: build.env
+    expire_in: 7 days
+
+build:windows:
+  stage: build
+  <<: *dev_build_rules_manual
+  tags:
+    - saas-windows-medium-amd64
+  before_script:
+    - choco install rust -y
+    - choco install bun -y
+    - refreshenv
+    - cargo install tauri-cli --locked
+  script:
+    - cargo build --release --locked -p craws-cli -p craws-mcp
+    - New-Item -ItemType Directory -Force dist, stage | Out-Null
+    - Copy-Item target/release/craws.exe stage/
+    - Copy-Item target/release/craws-mcp.exe stage/
+    - Compress-Archive -Path stage/* -DestinationPath dist/craws-windows-x86_64.zip
+    - Push-Location app; bun install --frozen-lockfile; bun run build; Pop-Location
+    - Push-Location crates/craws-app; cargo tauri build --bundles nsis; Pop-Location
+    - Get-ChildItem target/release/bundle/nsis/*.exe | Copy-Item -Destination dist/
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 7 days
+
+build:macos:
+  stage: build
+  <<: *dev_build_rules_manual
+  tags:
+    - saas-macos-medium-m1
+  before_script:
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - curl -fsSL https://bun.sh/install | bash
+    - export PATH="$HOME/.bun/bin:$PATH"
+    - cargo install tauri-cli --locked
+  script:
+    - cargo build --release --locked -p craws-cli -p craws-mcp
+    - mkdir -p dist stage
+    - cp target/release/craws target/release/craws-mcp stage/
+    - strip stage/craws stage/craws-mcp || true
+    - tar -C stage -czf dist/craws-macos-arm64.tar.gz craws craws-mcp
+    - (cd app && bun install --frozen-lockfile && bun run build)
+    - (cd crates/craws-app && cargo tauri build --bundles dmg)
+    - find target/release/bundle -type f -name '*.dmg' -exec cp {} dist/ \;
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 7 days
+
+release:dev-build:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  <<: *dev_build_rules
+  variables:
+    GIT_DEPTH: "0"
+  needs:
+    - job: prepare:version
+      artifacts: true
+    - job: build:linux
+      artifacts: true
+    - job: build:windows
+      artifacts: true
+      optional: true
+    - job: build:macos
+      artifacts: true
+      optional: true
+  script:
+    - apk add --no-cache bash git curl jq >/dev/null
+    - ls -la dist || true
+    - |
+      PREV_SHA=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags/${RELEASE_TAG}" \
+        | jq -r '.commit.id // empty')
+    - >
+      curl --silent --request DELETE --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}"
+      "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags/${RELEASE_TAG}" || true
+    - |
+      if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$CI_COMMIT_SHA" ]; then
+        RANGE="$PREV_SHA..$CI_COMMIT_SHA"
+        COMMIT_COUNT_SINCE_LAST_BUILD=$(git rev-list --count "$RANGE")
+        CHANGED_FILES_COUNT=$(git diff --name-only "$RANGE" | wc -l | tr -d ' ')
+        COMMITS_SINCE_LAST_BUILD=$(git log --pretty=format:'- %s (`%h`)' "$RANGE")
+        CONTRIBUTORS_SINCE_LAST_BUILD=$(git log --pretty=format:'%an' "$RANGE" | sort -u | awk 'NR>1{printf ", "}{printf "%s", $0}')
+        PREVIOUS_TAG="\`$RELEASE_TAG\` (\`$(printf '%s' "$PREV_SHA" | cut -c1-8)\`)"
+      else
+        COMMIT_COUNT_SINCE_LAST_BUILD=0
+        CHANGED_FILES_COUNT=0
+        COMMITS_SINCE_LAST_BUILD="_First dev build — no prior history to diff against._"
+        CONTRIBUTORS_SINCE_LAST_BUILD="—"
+        PREVIOUS_TAG="(none — first dev build)"
+      fi
+    - |
+      ASSET_ARGS=""
+      for f in dist/*; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f")
+        url="${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/$f"
+        ASSET_ARGS="$ASSET_ARGS --assets-link {\"name\":\"$name\",\"url\":\"$url\"}"
+      done
+    - |
+      ARTIFACT_COUNT=$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')
+      ARTIFACT_LIST=$(cd dist && for f in *; do [ -f "$f" ] && printf -- '- `%s` (%s)\n' "$f" "$(du -h "$f" | cut -f1)"; done)
+    - |
+      COMMIT_AUTHOR_NAME=$(printf '%s' "$CI_COMMIT_AUTHOR" | sed -n 's/^\(.*\) <.*>$/\1/p')
+      COMMIT_AUTHOR_EMAIL=$(printf '%s' "$CI_COMMIT_AUTHOR" | sed -n 's/^.*<\(.*\)>$/\1/p')
+    - |
+      export TAG="$RELEASE_TAG"
+      export VERSION="$VERSION"
+      export PREVIOUS_TAG
+      export BRANCH="$CI_COMMIT_BRANCH"
+      export REPO="$CI_PROJECT_PATH"
+      export REPO_URL="$CI_PROJECT_URL"
+      export COMMIT_SHA="$CI_COMMIT_SHA"
+      export COMMIT_SHORT_SHA="$CI_COMMIT_SHORT_SHA"
+      export COMMIT_TITLE="$CI_COMMIT_TITLE"
+      export COMMIT_MESSAGE="$CI_COMMIT_MESSAGE"
+      export COMMIT_AUTHOR_NAME
+      export COMMIT_AUTHOR_EMAIL
+      export COMMIT_TIMESTAMP="$CI_COMMIT_TIMESTAMP"
+      export PUSHED_BY="$GITLAB_USER_LOGIN"
+      export BUILD_DATE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+      export RUN_ID="$CI_PIPELINE_ID"
+      export RUN_URL="$CI_PIPELINE_URL"
+      export RUST_VERSION="${RUST_VERSION:-unknown}"
+      export COMMIT_COUNT_SINCE_LAST_BUILD
+      export COMMITS_SINCE_LAST_BUILD
+      export CONTRIBUTORS_SINCE_LAST_BUILD
+      export CHANGED_FILES_COUNT
+      export ARTIFACT_COUNT
+      export ARTIFACT_LIST
+      bash scripts/render-release-notes.sh scripts/dev-release.template.md release-body.md \
+        TAG VERSION PREVIOUS_TAG BRANCH REPO REPO_URL \
+        COMMIT_SHA COMMIT_SHORT_SHA COMMIT_TITLE COMMIT_MESSAGE \
+        COMMIT_AUTHOR_NAME COMMIT_AUTHOR_EMAIL COMMIT_TIMESTAMP \
+        PUSHED_BY BUILD_DATE RUN_ID RUN_URL RUST_VERSION \
+        COMMIT_COUNT_SINCE_LAST_BUILD COMMITS_SINCE_LAST_BUILD \
+        CONTRIBUTORS_SINCE_LAST_BUILD CHANGED_FILES_COUNT \
+        ARTIFACT_COUNT ARTIFACT_LIST
+    - |
+      release-cli create \
+        --tag-name "$RELEASE_TAG" \
+        --ref "$CI_COMMIT_SHA" \
+        --description "$(cat release-body.md)" \
+        $ASSET_ARGS
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 7 days

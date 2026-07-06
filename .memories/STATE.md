@@ -9,18 +9,22 @@
 - **M0 core is live.** `craws run pipeline.json --in a.png --out b.webp` end-to-end: 24MP / 4-step
   pipeline now **~336 ms** (was 556; resize step 307→49 ms). Warm slider tweak on a 24MP chain =
   **11.8 ms**; fully-cached op = **85 µs**.
-- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). Tools:
-  `open_image` `resize` `crop` `exposure` `grayscale` `image_info` `export`. Image-handle session:
-  each op returns a NEW immutable `image_id` (mirrors engine tiles), shared engine cache across the
-  session. Driven end-to-end over real JSON-RPC (open→resize→exposure→grayscale→export) and **wired
-  into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`, entry `craws`; original backed up
-  `.bak-craws`). "It's alive" achieved before the GUI exists — the M1 goal.
+- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). 13 tools:
+  `open_image` `resize` `crop` `exposure` `grayscale` `image_info` `export` + **annotation**
+  `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` + **composition** `overlay` `collage`. Image-handle
+  session: each op returns a NEW immutable `image_id` (mirrors engine tiles), shared engine cache
+  across the session. Wired **into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`, entry `craws`;
+  original backed up `.bak-craws`).
+- **M1 killer feature shipped** (owner's doc-automation use case): annotate screenshots with
+  arrows / circles / boxes (color, stroke width, corner radius, fill, opacity) + overlay screenshots
+  + smart auto-layout collages. Verified visually end-to-end over stdio (annotated login mockup +
+  3-shot justified collage). Text-on-image is the agreed next iteration.
 - **M2 spike is live** (`crates/craws-app` Tauri 2 + `app/` React/WebGPU): real window, 24MP sample,
   exposure slider, pan/zoom, live stats overlay, auto-bench. **The stack decision is now proven by
   measurement, not argument** (see M2 SPIKE VERDICT below).
-- Crates: `craws-domain` (types+validation), `craws-engine` (tiles/hash/cache/ops/runner),
-  `craws-codecs` (png/jpeg/webp via `image`), `craws-cli` (bin `craws`), `craws-mcp` (rmcp stdio
-  server + testable `Session` core), `craws-app` (Tauri 2 shell, raw binary IPC).
+- Crates: `craws-domain` (types+validation+color), `craws-engine` (tiles/hash/cache/ops/resample/
+  **draw** (SDF rasterizer)/**compose** (overlay+collage)), `craws-codecs` (png/jpeg/webp),
+  `craws-cli` (bin `craws`), `craws-mcp` (rmcp stdio server + testable `Session`), `craws-app` (Tauri 2).
 - Front: `app/` — Vite + React 19 + TS + Tailwind 4 + WebGPU. No animation lib (framer-motion
   rejected). tauri-specta not wired yet (M3).
 - UI stack `[DECIDED]`: Tauri 2 + React; animations CSS/WAAPI-only.
@@ -83,19 +87,20 @@ channel) ~106 ms could use an encode LUT.
 | Check | Status |
 |-------|--------|
 | `cargo build --workspace` | Passes |
-| `cargo test --workspace` | **54 passing** (7 domain + 30 engine + 5 codecs + 1+4 cli + 5 mcp-session + 2 mcp-stdio) |
+| `cargo test --workspace` | **71 passing** (9 domain + 40 engine + 5 codecs + 1+4 cli + 9 mcp-lib/session + 3 mcp-stdio) |
 | `cargo clippy --workspace --all-targets` | **0 warnings** |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
-| CI | `[TODO]` (mirror pooprusteek's build+test win/linux) |
+| CI | `[DONE]` — `.github/workflows/{ci,dev-release}.yml` + `.gitlab-ci.yml` (mirror). CI gate: fmt·clippy `-D warnings`·build·test·bench-compile (win/linux), Tauri shell in its own job. Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** desktop installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
 
 ## CURRENT FOCUS
 
 M0, M1, M2-spike all done. Next candidates (owner's call):
 1. **M3 — the editor**: build the real UI on the proven spike (properties panel, linear-chains UI,
    design tokens). Promote spike ad-hoc pieces to infra (tauri-specta, tile streaming, mip base).
-2. **Broaden M1**: more ops as tools (rotate/flip/blur/brightness-contrast), a `run_pipeline` tool
-   (whole JSON pipeline in one call), batch-over-folder helper. Watermark/overlay op needs a new
-   compositing op first (no text/overlay op exists yet — deferred from the original demo idea).
+2. **Broaden M1** (annotation + composition DONE 2026-07-06 — draw_rect/ellipse/line/arrow,
+   overlay, collage): remaining — **text-on-image** (next iteration, agreed; glyph masks reuse the
+   draw.rs coverage→composite path), rotate/flip/blur/brightness-contrast, `run_pipeline` (whole JSON
+   in one call), batch-over-folder helper. Watermarking now expressible via overlay + (future) text.
 3. **BLAZING debt** (pass #1 done — resize 6× + jpeg 2.4×): remaining — port-level batch parallelism
    (encode many files at once), png encode, export `powf` LUT, and a fully-streaming (no intermediate
    flat) resampler for images that dwarf RAM.

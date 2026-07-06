@@ -20,6 +20,19 @@ pub fn srgb8_to_linear(v: u8) -> f32 {
     SRGB_TO_LINEAR[v as usize]
 }
 
+/// Convert an authored straight-alpha sRGB color to the engine's internal
+/// linear-light **premultiplied** RGBA. Used by the rasterizer and compositor.
+#[inline]
+pub fn rgba8_to_linear_premul(c: craws_domain::Rgba8) -> [f32; 4] {
+    let a = c.a as f32 / 255.0;
+    [
+        srgb8_to_linear(c.r) * a,
+        srgb8_to_linear(c.g) * a,
+        srgb8_to_linear(c.b) * a,
+        a,
+    ]
+}
+
 /// Clamps to [0, 1] (this is the only place the pipeline clamps) and encodes.
 #[inline]
 pub fn linear_to_srgb8(v: f32) -> u8 {

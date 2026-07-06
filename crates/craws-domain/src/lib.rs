@@ -4,8 +4,10 @@
 //! is the innermost ring. It knows nothing about files, pixels-in-memory layout,
 //! GPUs or UI — only *what* an edit is, not *how* it executes.
 
+pub mod color;
 pub mod geometry;
 pub mod pipeline;
 
+pub use color::Rgba8;
 pub use geometry::{Rect, Size};
 pub use pipeline::{Filter, OpSpec, Pipeline, PipelineError};
