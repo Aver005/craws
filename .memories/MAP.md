@@ -31,8 +31,17 @@ crates/craws-cli/               port #1
   tests/e2e.rs                  drives the real binary: happy path, invalid pipeline, quiet, ops
   examples/gen_sample.rs        synthetic 24MP "photo" generator
 
-crates/craws-mcp/               port #2 stub (M1: rmcp server)
-  src/lib.rs                    placeholder const + plan doc
+crates/craws-mcp/               port #2: MCP server (rmcp 2.1, stdio, protocol 2024-11-05)
+  src/session.rs                Session — engine-facing core, NO mcp types (unit-testable):
+                                open_bytes/open_path, apply(OpSpec)→new handle, info, export; immutable
+                                image handles ("img-N"), shared Engine cache, SessionError
+  src/lib.rs                    rmcp wrapper: Craws { session, tool_router }, #[tool_router]/#[tool]
+                                (open_image/resize/crop/exposure/grayscale/image_info/export),
+                                #[tool_handler(router = self.tool_router)], get_info (instructions);
+                                results are JSON text (image parts get dropped by clients)
+  src/main.rs                   bin `craws-mcp`: serve(stdio()); logs to STDERR only (stdout=protocol)
+  tests/stdio_protocol.rs       spawns the real binary, full JSON-RPC handshake + batch + error paths
+                                (mirrors pooprusteek's client) — doubles as the demo transcript
 
 crates/craws-app/               port #3: Tauri 2 GUI shell (M2 spike)
   src/main.rs                   commands: load_source / render (raw binary frame) / report_bench;

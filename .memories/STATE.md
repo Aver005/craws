@@ -1,18 +1,24 @@
 # STATE
 > Live project snapshot. Update on every meaningful change.
-> Last updated: 2026-07-06 — **M0 + M2 viewport-bridge spike shipped**. Tauri 2 + React validated
-> with numbers: optimistic in-shader preview = 165 fps (display-bound), 0 bridge calls. Next: M1 (MCP).
+> Last updated: 2026-07-06 — **M0 + M1 (MCP) + M2 spike all shipped**. craws-mcp on rmcp drives the
+> engine over stdio; verified with a real JSON-RPC batch and wired into pooprusteek. 50 tests, clippy 0.
 
 ## SNAPSHOT
 
 - **M0 core is live.** `craws run pipeline.json --in a.png --out b.webp` end-to-end: 24MP / 4-step
   pipeline in ~556 ms. Warm slider tweak on a 24MP chain = **11.8 ms**; fully-cached op = **85 µs**.
+- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). Tools:
+  `open_image` `resize` `crop` `exposure` `grayscale` `image_info` `export`. Image-handle session:
+  each op returns a NEW immutable `image_id` (mirrors engine tiles), shared engine cache across the
+  session. Driven end-to-end over real JSON-RPC (open→resize→exposure→grayscale→export) and **wired
+  into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`, entry `craws`; original backed up
+  `.bak-craws`). "It's alive" achieved before the GUI exists — the M1 goal.
 - **M2 spike is live** (`crates/craws-app` Tauri 2 + `app/` React/WebGPU): real window, 24MP sample,
   exposure slider, pan/zoom, live stats overlay, auto-bench. **The stack decision is now proven by
   measurement, not argument** (see M2 SPIKE VERDICT below).
 - Crates: `craws-domain` (types+validation), `craws-engine` (tiles/hash/cache/ops/runner),
-  `craws-codecs` (png/jpeg/webp via `image`), `craws-cli` (bin `craws`), `craws-mcp` (stub),
-  `craws-app` (Tauri 2 shell: `load_source`/`render`/`report_bench`, raw binary IPC).
+  `craws-codecs` (png/jpeg/webp via `image`), `craws-cli` (bin `craws`), `craws-mcp` (rmcp stdio
+  server + testable `Session` core), `craws-app` (Tauri 2 shell, raw binary IPC).
 - Front: `app/` — Vite + React 19 + TS + Tailwind 4 + WebGPU. No animation lib (framer-motion
   rejected). tauri-specta not wired yet (M3).
 - UI stack `[DECIDED]`: Tauri 2 + React; animations CSS/WAAPI-only.
@@ -73,13 +79,17 @@ first BLAZING candidate (mozjpeg / jpeg-encoder / turbojpeg behind the same code
 | Check | Status |
 |-------|--------|
 | `cargo build --workspace` | Passes |
-| `cargo test --workspace` | **43 passing** (7 domain + 26 engine + 5 codecs + 1 cli + 4 e2e) |
+| `cargo test --workspace` | **50 passing** (7 domain + 26 engine + 5 codecs + 1+4 cli + 5 mcp-session + 2 mcp-stdio) |
 | `cargo clippy --workspace --all-targets` | **0 warnings** |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
 | CI | `[TODO]` (mirror pooprusteek's build+test win/linux) |
 
 ## CURRENT FOCUS
 
-1. **M1 — MCP demo**: `craws-mcp` on `rmcp`, tools `open_image`/`resize`/`crop`/`apply_filter`/
-   `export`; connect from pooprusteek via `/mcp add`; watermark-batch demo scenario.
-2. Then M2 — viewport bridge spike (Tauri, exit numbers in `PLANS.md`).
+M0, M1, M2-spike all done. Next candidates (owner's call):
+1. **M3 — the editor**: build the real UI on the proven spike (properties panel, linear-chains UI,
+   design tokens). Promote spike ad-hoc pieces to infra (tauri-specta, tile streaming, mip base).
+2. **Broaden M1**: more ops as tools (rotate/flip/blur/brightness-contrast), a `run_pipeline` tool
+   (whole JSON pipeline in one call), batch-over-folder helper. Watermark/overlay op needs a new
+   compositing op first (no text/overlay op exists yet — deferred from the original demo idea).
+3. **BLAZING debt**: jpeg encode 893 ms (swap encoder behind codecs API); streaming tile-band resize.

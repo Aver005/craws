@@ -11,11 +11,15 @@ criterion benches. 43 tests, clippy 0. Numbers in `STATE.md` + `JOURNAL/2026-07-
 Deviations from plan: `Document` type deferred to M1+ (pipelines don't need it yet);
 brightness shipped as photographic `exposure`; curves deferred.
 
-### M1 — MCP demo with pooprusteek `[TODO]` ← NEXT
-- `craws-mcp` on the official `rmcp` SDK: expose `open_image`, `resize`, `crop`, `apply_filter`,
-  `export`, `describe_image` (stub until vision).
-- Connect from pooprusteek via `/mcp add` (stdio). Demo: "take all screenshots in folder, crop,
-  watermark, export webp" driven by the agent. This is the "it's alive" moment.
+### M1 — MCP server + pooprusteek `[DONE 2026-07-06]` ✅ "it's alive"
+`crates/craws-mcp` on rmcp 2.1: stdio, protocol 2024-11-05, tools `open_image` / `resize` / `crop`
+/ `exposure` / `grayscale` / `image_info` / `export`. Image-handle session (immutable, new id per op;
+shared engine cache). Verified with a real JSON-RPC batch over the spawned binary (2 stdio integration
+tests + 5 session unit tests) and wired into pooprusteek's `mcp.json` (entry `craws`, original backed
+up). Ran the full open→resize→exposure→grayscale→export batch live.
+Deviations from the original plan: tools are one-per-op (chainable via returned image_id) rather than a
+single `apply_filter`; `describe_image` deferred (needs vision); the watermark demo needs a compositing
+op that doesn't exist yet, so the shipped demo is resize/adjust/convert batch (the real core value).
 
 ### M2 — Viewport bridge spike `[DONE 2026-07-06]` ✅ decision de-risked
 Built `crates/craws-app` (Tauri 2) + `app/` (React/WebGPU): window, 24MP sample, exposure slider,
