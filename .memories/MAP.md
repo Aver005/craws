@@ -33,4 +33,26 @@ crates/craws-cli/               port #1
 
 crates/craws-mcp/               port #2 stub (M1: rmcp server)
   src/lib.rs                    placeholder const + plan doc
+
+crates/craws-app/               port #3: Tauri 2 GUI shell (M2 spike)
+  src/main.rs                   commands: load_source / render (raw binary frame) / report_bench;
+                                20-byte frame header (magic,w,h,engine_us,convert_us) + sRGB8
+  build.rs                      tauri_build
+  tauri.conf.json               window, devUrl→dist, csp null (spike)
+  capabilities/default.json     core:default only
+  icons/icon.ico                placeholder (amber claw marks) — replace with real mascot
+  Cargo.toml                    features: default=custom-protocol (embeds dist; tauri dev = no-default)
+
+app/                            React front (Vite + TS + Tailwind 4 + WebGPU)
+  src/main.tsx, styles.css      bootstrap
+  src/ipc.ts                    typed bridge; parses raw frame header; makeRenderQueue (latest-wins)
+  src/renderer.ts               Viewport: WebGPU quad, pan/zoom = GPU transform, in-shader
+                                exposure/grayscale (srgb↔linear) for optimistic preview
+  src/App.tsx                   overlay UI: slider, mode toggle (optimistic/authoritative),
+                                stats, dual auto-bench
+  index.html, package.json, vite.config.ts, tsconfig.json
 ```
+
+## PERF NUMBERS (24MP, release, owner's machine — see STATE for the table)
+M0 engine: warm slider-tweak 11.8 ms, cached op 85 µs, CLI end-to-end 556 ms.
+M2 bridge spike: pan/zoom 165 fps; authoritative slider 7.8 fps (bridge 104 ms); optimistic 165 fps.

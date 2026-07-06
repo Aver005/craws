@@ -1,0 +1,29 @@
+[package]
+name = "craws-app"
+description = "Craws GUI shell: Tauri 2 host for the React viewport (port #3 over craws-engine)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "craws-app"
+path = "src/main.rs"
+
+[features]
+# tauri semantics: dev = !custom-protocol (see tauri's build.rs), independent of
+# the cargo profile. Plain `cargo run` embeds app/dist; `tauri dev` (CLI) builds
+# with --no-default-features to get the live devUrl instead.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+craws-domain = { workspace = true }
+craws-engine = { workspace = true }
+craws-codecs = { workspace = true }

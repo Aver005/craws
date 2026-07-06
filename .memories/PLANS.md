@@ -17,20 +17,27 @@ brightness shipped as photographic `exposure`; curves deferred.
 - Connect from pooprusteek via `/mcp add` (stdio). Demo: "take all screenshots in folder, crop,
   watermark, export webp" driven by the agent. This is the "it's alive" moment.
 
-### M2 — Viewport bridge spike `[TODO]` (redefined: was "GPUI vs Tauri", stack is now decided)
-Prove the numbers on the owner's machine before building the real UI:
-- Tauri 2 app, React front; engine streams **changed tiles** (raw bytes, `tauri::ipc::Response` /
-  `Channel`) → WebGPU canvas composites a tile atlas.
-- Optimistic preview: exposure/curves applied as in-page WebGPU shader during slider drag (zero
-  bridge traffic), engine recomputes authoritative result on release.
-- Exit criteria: 24MP image, slider drag ≥ 30fps preview in WebView2, pan/zoom ≥ 60fps, numbers in JOURNAL.
-- Fallback ladder if numbers fail: mip-level preview degradation → native wgpu surface under
-  transparent child webview (unstable Tauri feature — last resort) → GPUI reopens.
+### M2 — Viewport bridge spike `[DONE 2026-07-06]` ✅ decision de-risked
+Built `crates/craws-app` (Tauri 2) + `app/` (React/WebGPU): window, 24MP sample, exposure slider,
+pan/zoom, stats overlay, auto-bench. **All exit criteria met** (numbers in STATE + JOURNAL):
+- pan/zoom (pure GPU) = **165 fps** ✅ (≥60 target); GPU compositing is free.
+- authoritative full-frame slider = 7.8 fps (bridge = 104 ms / 9.4 MB) ❌ — confirms the bridge is
+  the bottleneck, as anticipated.
+- **optimistic in-shader preview = 165 fps, 0 bridge calls** ✅ (≥30 target) — pointwise ops
+  (exposure/grayscale) applied in the fragment shader in linear light on a neutral base; engine
+  reconciles on release. 21× the naive path, display-bound.
+- Fallback ladder (mip degradation → native wgpu under transparent child webview → GPUI) NOT needed.
+- Left for M3: changed-tiles-only streaming, mip base pyramid, tauri-specta typed IPC, and the
+  bridge-throughput number matters only for non-shader ops (blur, resize-on-zoom).
 
 ### M3 — The editor `[TODO]`
 - Viewport (from M2 spike) + properties panel + **linear chains UI** (ordered step list covers 80%
   of automation; full node-graph editor comes later — React Flow when it does).
 - Beautiful from the start: design tokens, dark theme first, shadcn-family components.
+- Promote the spike's ad-hoc pieces to real infra: tauri-specta typed commands, changed-tiles-only
+  tile streaming + atlas (replace the single-texture full-frame upload), mip base pyramid, a
+  generalized in-shader preview layer for all pointwise ops, `prefers-reduced-motion`-aware CSS/WAAPI
+  micro-interactions.
 
 ## UI & ANIMATION PHILOSOPHY (owner contract)
 

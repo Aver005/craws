@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "M2 spike: core IPC only",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

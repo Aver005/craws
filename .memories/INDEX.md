@@ -1,7 +1,7 @@
 # .memories INDEX
 > Agent entry point. If you were handed this project cold, START HERE. Last updated: 2026-07-06
-> (M0 shipped: tiled engine + content-hash cache + CLI runner; 43 tests, clippy 0; slider-tweak on
-> a warm 24MP chain = 11.8 ms. Next: M1 MCP server).
+> (M0 shipped: tiled engine + content-hash cache + CLI, 43 tests, clippy 0. M2 spike shipped: Tauri 2
+> + React proven — optimistic in-shader preview 165 fps, 0 bridge calls. Next: M1 MCP server).
 
 > `CLAUDE.md` at the repo root is the auto-loaded bridge into this folder for Claude Code.
 > Other agents must be told to read `.memories/INDEX.md` first.
