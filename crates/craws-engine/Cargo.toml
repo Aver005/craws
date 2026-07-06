@@ -1,0 +1,24 @@
+[package]
+name = "craws-engine"
+description = "Craws tiled execution engine: content-hash cache, linear f32 premultiplied color, rayon parallelism."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+craws-domain = { workspace = true }
+blake3 = { workspace = true }
+rayon = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# buffers + imageops only (resampling); no codec features here — codecs live in craws-codecs
+image = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "engine"
+harness = false

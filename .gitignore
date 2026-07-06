@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# future React front (M2+)
+node_modules/
+dist/
+
+# local scratch
+*.local.*
+.DS_Store
+Thumbs.db

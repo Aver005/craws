@@ -1,0 +1,15 @@
+[package]
+name = "craws-domain"
+description = "Craws domain core: geometry, pipeline spec, validation. Zero I/O dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

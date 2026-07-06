@@ -1,0 +1,10 @@
+[package]
+name = "craws-mcp"
+description = "Craws MCP server: engine operations as agent tools. Stub until M1."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
