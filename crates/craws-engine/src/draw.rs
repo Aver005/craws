@@ -314,8 +314,60 @@ pub fn arrow(
     render(input, bbox, &layers, tile_hash)
 }
 
+/// Composite a coverage mask (row-major `mw × mh`, values 0..1) painted in
+/// `color`, placed with its top-left at image coordinate `(ox, oy)` (which may
+/// be negative — the mask is clipped to the image). Used by text rendering:
+/// glyph outlines rasterize into the mask, then blend in linear light like any
+/// other shape. Only tiles overlapping the mask recompute.
+#[allow(clippy::too_many_arguments)]
+pub fn composite_mask(
+    input: &TiledImage,
+    ox: i32,
+    oy: i32,
+    mw: u32,
+    mh: u32,
+    mask: &[f32],
+    color: Rgba8,
+    tile_hash: &(dyn Fn(u32) -> ContentHash + Sync),
+) -> TiledImage {
+    debug_assert_eq!(mask.len(), mw as usize * mh as usize);
+    let paint = Paint::new(color);
+    let size = input.size();
+    let (cols, rows) = grid_dims(size);
+    let tiles: Vec<TileRef> = (0..cols * rows)
+        .into_par_iter()
+        .map(|index| {
+            let (col, row) = (index % cols, index / cols);
+            let (tw, th) = tile_dims(size, col, row);
+            let (tox, toy) = ((col * TILE_SIZE) as i32, (row * TILE_SIZE) as i32);
+            let lx0 = (ox - tox).max(0);
+            let ly0 = (oy - toy).max(0);
+            let lx1 = ((ox + mw as i32) - tox).min(tw as i32);
+            let ly1 = ((oy + mh as i32) - toy).min(th as i32);
+            if lx1 <= lx0 || ly1 <= ly0 {
+                let src = &input.tiles()[index as usize];
+                return TileRef { hash: tile_hash(index), tile: Arc::clone(&src.tile) };
+            }
+            let mut px = input.tiles()[index as usize].tile.px.to_vec();
+            for ly in ly0..ly1 {
+                let my = (toy + ly - oy) as usize;
+                for lx in lx0..lx1 {
+                    let mx = (tox + lx - ox) as usize;
+                    let cov = mask[my * mw as usize + mx];
+                    if cov > 0.0 {
+                        let off = (ly as usize * tw as usize + lx as usize) * 4;
+                        over(&mut px[off..off + 4], &paint, cov);
+                    }
+                }
+            }
+            TileRef { hash: tile_hash(index), tile: Arc::new(Tile::new(tw, th, px.into_boxed_slice())) }
+        })
+        .collect();
+    TiledImage::new(size, tiles)
+}
+
 /// Fallback when a shape is entirely off-canvas: reuse every tile under new hashes.
-fn clone_all(input: &TiledImage, tile_hash: &(dyn Fn(u32) -> ContentHash + Sync)) -> TiledImage {
+pub fn clone_all(input: &TiledImage, tile_hash: &(dyn Fn(u32) -> ContentHash + Sync)) -> TiledImage {
     let tiles = input
         .tiles()
         .iter()

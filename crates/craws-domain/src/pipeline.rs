@@ -19,6 +19,28 @@ pub enum Filter {
     Lanczos3,
 }
 
+/// Horizontal anchoring of text at its `(x, y)` point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlignX {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Vertical anchoring of text at its `(x, y)` point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlignY {
+    Top,
+    Middle,
+    Bottom,
+    /// `y` is the baseline of the first line (the typographic default).
+    #[default]
+    Baseline,
+}
+
 /// One step of a pipeline. Serialized with an `op` tag:
 /// `{ "op": "resize", "width": 1600 }`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +114,27 @@ pub enum OpSpec {
         #[serde(default = "default_head_length")]
         head_length: f32,
     },
+    /// Text, anchored at `(x, y)` per `align_x`/`align_y`. `\n` starts a new line.
+    /// `font` is an explicit font-file path (the engine stays deterministic); a
+    /// missing/unreadable path falls back to the embedded default. Ports resolve
+    /// font *names* to paths before building this op.
+    DrawText {
+        x: f32,
+        y: f32,
+        text: String,
+        color: Rgba8,
+        #[serde(default = "default_font_size")]
+        font_size: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font: Option<String>,
+        #[serde(default)]
+        align_x: AlignX,
+        #[serde(default)]
+        align_y: AlignY,
+        /// Baseline-to-baseline distance; defaults to the font's natural line height.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line_height: Option<f32>,
+    },
 }
 
 fn default_stroke_width() -> f32 {
@@ -102,6 +145,9 @@ fn default_thickness() -> f32 {
 }
 fn default_head_length() -> f32 {
     18.0
+}
+fn default_font_size() -> f32 {
+    24.0
 }
 
 impl OpSpec {
@@ -116,6 +162,7 @@ impl OpSpec {
             OpSpec::DrawEllipse { .. } => "draw_ellipse",
             OpSpec::DrawLine { .. } => "draw_line",
             OpSpec::DrawArrow { .. } => "draw_arrow",
+            OpSpec::DrawText { .. } => "draw_text",
         }
     }
 
@@ -188,6 +235,16 @@ impl OpSpec {
                 check_finite("draw_arrow", &[x1, y1, x2, y2, thickness, head_length])?;
                 if thickness < 0.0 || head_length < 0.0 {
                     return Err(PipelineError::NegativeParam { op: "draw_arrow" });
+                }
+                Ok(input)
+            }
+            OpSpec::DrawText { x, y, font_size, line_height, .. } => {
+                check_finite("draw_text", &[x, y, font_size])?;
+                if line_height.is_some_and(|lh| !lh.is_finite()) {
+                    return Err(PipelineError::NonFiniteParam { op: "draw_text", param: "line_height" });
+                }
+                if font_size <= 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "draw_text" });
                 }
                 Ok(input)
             }
@@ -332,6 +389,30 @@ mod tests {
         // non-finite geometry is rejected
         let nan = OpSpec::DrawLine { x1: f32::NAN, y1: 0.0, x2: 1.0, y2: 1.0, color: red, thickness: 1.0 };
         assert!(matches!(nan.output_size(px(10, 10)), Err(PipelineError::NonFiniteParam { .. })));
+    }
+
+    #[test]
+    fn draw_text_defaults_and_validation() {
+        use crate::color::Rgba8;
+        let op: OpSpec = serde_json::from_str(
+            r#"{ "op": "draw_text", "x": 10, "y": 20, "text": "Hello\nмир", "color": { "r": 0, "g": 0, "b": 0 } }"#,
+        )
+        .unwrap();
+        match &op {
+            OpSpec::DrawText { text, font_size, align_x, align_y, font, .. } => {
+                assert_eq!(text, "Hello\nмир", "unicode text preserved");
+                assert_eq!(*font_size, 24.0, "font_size defaults");
+                assert_eq!(*align_x, AlignX::Left);
+                assert_eq!(*align_y, AlignY::Baseline);
+                assert!(font.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(op.name(), "draw_text");
+        assert_eq!(op.output_size(px(200, 100)).unwrap(), px(200, 100), "text keeps size");
+
+        let bad = OpSpec::DrawText { x: 0.0, y: 0.0, text: "x".into(), color: Rgba8::rgb(0, 0, 0), font_size: 0.0, font: None, align_x: AlignX::Left, align_y: AlignY::Baseline, line_height: None };
+        assert!(matches!(bad.output_size(px(10, 10)), Err(PipelineError::NegativeParam { .. })), "font_size must be > 0");
     }
 
     #[test]

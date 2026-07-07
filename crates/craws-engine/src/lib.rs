@@ -17,9 +17,11 @@ pub mod color;
 pub mod compose;
 pub mod draw;
 pub mod engine;
+pub mod fonts;
 pub mod hash;
 pub mod ops;
 pub mod resample;
+pub mod text;
 pub mod tile;
 
 pub use engine::{Engine, EngineError, NodeStat, RunStats, DEFAULT_CACHE_BYTES};

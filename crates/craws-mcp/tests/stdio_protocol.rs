@@ -126,7 +126,7 @@ fn handshake_lists_tools_and_runs_a_batch() {
         .collect();
     for expected in [
         "open_image", "resize", "crop", "exposure", "grayscale", "image_info", "export",
-        "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "overlay", "collage",
+        "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "draw_text", "overlay", "collage",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}; got {names:?}");
     }
@@ -186,6 +186,8 @@ fn annotation_and_collage_over_the_wire() {
     let id = c.call_ok("draw_rect", json!({ "image_id": id, "x": 40, "y": 40, "width": 200, "height": 120, "corner_radius": 12, "stroke": "#ff3030", "stroke_width": 5 }))["image_id"].as_str().unwrap().to_string();
     let id = c.call_ok("draw_ellipse", json!({ "image_id": id, "x": 300, "y": 200, "width": 140, "height": 140, "stroke": "yellow", "stroke_width": 6 }))["image_id"].as_str().unwrap().to_string();
     let id = c.call_ok("draw_arrow", json!({ "image_id": id, "x1": 120, "y1": 300, "x2": 300, "y2": 240, "color": "#00a0ff", "thickness": 6 }))["image_id"].as_str().unwrap().to_string();
+    // caption the annotation (default font, centered) — unicode included
+    let id = c.call_ok("draw_text", json!({ "image_id": id, "x": 140, "y": 60, "text": "Шаг 1: нажмите", "color": "#111111", "font_size": 28, "align_x": "left" }))["image_id"].as_str().unwrap().to_string();
     let out = dir.path().join("annotated.png");
     c.call_ok("export", json!({ "image_id": id, "path": out.to_str().unwrap() }));
     let d = craws_codecs::decode(&std::fs::read(&out).unwrap()).unwrap();

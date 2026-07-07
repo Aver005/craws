@@ -10,4 +10,4 @@ pub mod pipeline;
 
 pub use color::Rgba8;
 pub use geometry::{Rect, Size};
-pub use pipeline::{Filter, OpSpec, Pipeline, PipelineError};
+pub use pipeline::{AlignX, AlignY, Filter, OpSpec, Pipeline, PipelineError};

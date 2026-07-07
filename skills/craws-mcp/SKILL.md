@@ -3,14 +3,15 @@ name: craws-mcp
 description: >-
   Drive the craws image MCP server to annotate, compose, and transform images —
   above all, screenshots for documentation. Use this whenever you need to draw
-  arrows, circles, rectangles, lines, or translucent highlights on an image;
-  point at or mark up a UI element in a screenshot; redact/censor a region;
-  overlay one image on another; build a multi-image collage or figure; or crop,
-  resize, adjust exposure, or grayscale an image with craws. Trigger it for
-  requests like "annotate this screenshot", "circle the login button", "add an
-  arrow pointing to the menu", "make a collage of these screenshots", "mark this
-  up for the docs", "blur out the API key", or any flow that pairs Playwright /
-  browser screenshots with image editing — even if the user never says "craws".
+  arrows, circles, rectangles, lines, or translucent highlights on an image; add
+  a text label or caption; point at or mark up a UI element in a screenshot;
+  redact/censor a region; overlay one image on another; build a multi-image
+  collage or figure; or crop, resize, adjust exposure, or grayscale an image with
+  craws. Trigger it for requests like "annotate this screenshot", "circle the
+  login button", "add an arrow pointing to the menu", "label this step", "caption
+  the figure", "make a collage of these screenshots", "mark this up for the docs",
+  "blur out the API key", or any flow that pairs Playwright / browser screenshots
+  with image editing — even if the user never says "craws".
 ---
 
 # Using the craws image MCP
@@ -53,9 +54,9 @@ handle's current size.
 3. **Compose** if you have several images (`overlay`, `collage`).
 4. **Export** the final handle to a file (`export`; format follows the extension).
 
-Single-image edits (`resize`, `crop`, `exposure`, `grayscale`, the four `draw_*`)
-each take one `image_id` and return one. `overlay` and `collage` take several
-handles and return one.
+Single-image edits (`resize`, `crop`, `exposure`, `grayscale`, the five `draw_*`
+including `draw_text`) each take one `image_id` and return one. `overlay` and
+`collage` take several handles and return one.
 
 ## Coordinates: pixels, top-left origin — and where to get them
 
@@ -102,6 +103,14 @@ light), so `#22c55e55` is a real 33%-opacity green wash you can lay over content
   brand color) over the region. (A blur op isn't available yet — a solid bar is the
   reliable redaction.)
 - **Underline / connector → `draw_line`.**
+- **Label / caption a step → `draw_text`.** Anchor at `(x, y)`; control how the text
+  sits on that point with `align_x` (`left`/`center`/`right`) and `align_y`
+  (`top`/`middle`/`bottom`/`baseline`). Set `font_size` (px). `font` is optional — a
+  family name resolved from installed fonts (e.g. `"Segoe UI"`, `"Arial"`) or a path
+  to a `.ttf`/`.otf`; omit it for the built-in font. `\n` starts a new line
+  (`line_height` tunes spacing). Text is Unicode — Latin and Cyrillic render out of
+  the box. To number a badge, center the text (`align_x:"center"`, `align_y:"middle"`)
+  on a filled circle's center so the digit sits inside it.
 
 At least one of `fill`/`stroke` is required for rect/ellipse — a shape with neither
 is rejected. Keep stroke widths readable at the doc's final display size: 4–6px on a
@@ -137,6 +146,9 @@ outline/arrow on top, so the callout reads clearly.
   error by far.
 - **Arrow direction** — head is at `(x2,y2)`; that's the thing you're pointing *at*.
 - **Empty shape** — rect/ellipse need a `fill` or a `stroke` (or both).
+- **Text placement** — `(x,y)` is an anchor, not the top-left; a caption that lands
+  in the wrong spot usually means the wrong `align_x`/`align_y`. `align_y:"baseline"`
+  (the default) puts `y` on the first line's baseline, so glyphs sit *above* `y`.
 - **Crop bounds** — the crop rect must lie fully inside the image, or it errors.
 - **Aspect on resize** — give `width` *or* `height` to scale proportionally; give
   both to force exact (possibly stretched) dimensions.

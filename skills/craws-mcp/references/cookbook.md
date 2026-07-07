@@ -65,17 +65,17 @@ layout. `boundingBox()` is in CSS pixels, so on a 2× capture an element at CSS
 
 ## Numbered-step callouts
 
-Put a numbered badge next to each highlighted element. Until a text tool lands, use a
-filled circle as the badge marker and let the surrounding doc carry the number, or
-draw the marker and rely on ordering:
+Put a numbered badge next to each highlighted element: a filled circle with the step
+number centered inside it. Center the digit on the circle's center
+(`align_x:"center"`, `align_y:"middle"`) so it sits dead-center:
 
 ```
-# highlight the target, then mark it with a solid dot the doc text refers to as "①"
+# highlight the target, drop a badge, number it — (cx, cy) is the badge center
 draw_rect    {image_id:img, x:.., y:.., width:.., height:.., stroke:"#2563eb", stroke_width:4} → a
-draw_ellipse {image_id:a, x:markX, y:markY, width:28, height:28, fill:"#2563eb"}               → b
+draw_ellipse {image_id:a, x:cx-16, y:cy-16, width:32, height:32, fill:"#2563eb"}               → b
+draw_text    {image_id:b, x:cx, y:cy, text:"1", color:"white", font_size:20,
+              align_x:"center", align_y:"middle"}                                              → c
 ```
-
-When the text tool arrives, the number goes inside the circle at `(markX, markY)`.
 
 ## Before / after plate
 

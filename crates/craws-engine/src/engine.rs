@@ -115,6 +115,27 @@ impl Engine {
                         draw::arrow(img, x1, y1, x2, y2, color, thickness, head_length, hash_fn)
                     })
                 }
+                // text: String/Option fields aren't Copy, so re-borrow from `step`
+                OpSpec::DrawText { .. } => {
+                    let OpSpec::DrawText { x, y, text, color, font_size, font, align_x, align_y, line_height } = step
+                    else {
+                        unreachable!()
+                    };
+                    let face = crate::fonts::load(font.as_deref());
+                    let params = crate::text::TextParams {
+                        x: *x,
+                        y: *y,
+                        text: text.clone(),
+                        color: *color,
+                        font_size: *font_size,
+                        align_x: *align_x,
+                        align_y: *align_y,
+                        line_height: *line_height,
+                    };
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        crate::text::draw(img, &params, &face, hash_fn)
+                    })
+                }
             };
             stats.nodes.push(NodeStat {
                 name: step.name(),

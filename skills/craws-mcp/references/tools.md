@@ -9,7 +9,7 @@ hex (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) or a name
 ## Contents
 - [Session & I/O](#session--io): open_image, image_info, export
 - [Transforms](#transforms): resize, crop, exposure, grayscale
-- [Annotation](#annotation): draw_rect, draw_ellipse, draw_line, draw_arrow
+- [Annotation](#annotation): draw_rect, draw_ellipse, draw_line, draw_arrow, draw_text
 - [Composition](#composition): overlay, collage
 
 ---
@@ -153,6 +153,27 @@ Segment with a V arrowhead at the **second** point.
 | `color` | color | yes | | |
 | `thickness` | float | no | 3 | |
 | `head_length` | float | no | 18 | arrowhead size |
+
+### `draw_text`
+Draw a text label. Anti-aliased glyphs composited in linear light; Unicode
+(Latin + Cyrillic render with the built-in font).
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `x`, `y` | float | yes | | anchor point (not top-left — see align) |
+| `text` | string | yes | | `\n` starts a new line |
+| `color` | color | yes | | |
+| `font_size` | float | no | 24 | pixel height |
+| `font` | string | no | built-in | a family name (resolved from installed fonts) **or** a `.ttf`/`.otf` path; omitted → the embedded default font |
+| `align_x` | string | no | `left` | `left` \| `center` \| `right` — horizontal anchoring at `x` |
+| `align_y` | string | no | `baseline` | `top` \| `middle` \| `bottom` \| `baseline` — vertical anchoring at `y` |
+| `line_height` | float | no | font's natural | baseline-to-baseline distance for multi-line text |
+
+`(x, y)` is an anchor: `align_x` decides whether the text starts at, centers on, or
+ends at `x`; `align_y:"baseline"` (default) puts `y` on the first line's baseline (so
+text sits above `y`), while `top`/`middle`/`bottom` anchor the text block's box.
+Unknown font names fall back to the built-in font; a bad `align_*` value errors.
 
 ---
 

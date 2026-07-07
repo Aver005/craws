@@ -11,7 +11,9 @@ crates/craws-domain/            ZERO-I/O core
   src/color.rs                  Rgba8 (straight-alpha sRGB; alpha defaults to 255 in JSON)
   src/geometry.rs               Size, Rect (overflow-safe fits_in)
   src/pipeline.rs               Pipeline, OpSpec (serde `op`-tagged: resize/crop/exposure/grayscale +
-                                draw_rect/ellipse/line/arrow), Filter, validation → sizes
+                                draw_rect/ellipse/line/arrow/text), Filter, AlignX/AlignY, validation
+                                → sizes. NOTE: OpSpec now has a non-Copy field (DrawText.text:String),
+                                so output_size uses `match *self` with `..` on that arm.
 
 crates/craws-engine/            the executor
   src/lib.rs                    re-exports + engine invariants doc
@@ -28,9 +30,16 @@ crates/craws-engine/            the executor
   src/draw.rs                   SDF vector rasterizer: rect (rounded, fill+stroke), ellipse, line,
                                 arrow (shaft+V-head); 1px AA coverage composited in LINEAR light;
                                 only bbox-overlapping tiles recompute. Paint = linear premul.
+                                pub composite_mask (coverage mask → tiles) reused by text; pub clone_all.
+  src/text.rs                   text layout (ab_glyph: kern, \n, align_x/y) → glyph coverage mask →
+                                draw::composite_mask. TextParams built from OpSpec::DrawText.
+  src/fonts.rs                  font loading: embedded default (assets/CascadiaCode.ttf, OFL) +
+                                load-by-explicit-path, cached by path. NO fontdb (determinism).
   src/compose.rs                multi-input ops (outside the single-input Pipeline): overlay (paste
                                 image at x,y + opacity) + collage (justified-rows layout by aspect,
                                 each full row fills width) → called directly by the MCP session.
+  assets/CascadiaCode.ttf       embedded default font (Microsoft, SIL OFL 1.1)
+  assets/CascadiaCode-LICENSE.txt  the font's OFL license (must ship with the font)
   src/engine.rs                 Engine::run — validate → per-step hash/cache/compute → RunStats
   benches/engine.rs             24MP: convert, exposure cold/cached, resize, chain cold/slider-warm
 
@@ -57,10 +66,12 @@ crates/craws-mcp/               port #2: MCP server (rmcp 2.1, stdio, protocol 2
                                 open_bytes/open_path, apply(OpSpec)→new handle, info, export; immutable
                                 image handles ("img-N"), shared Engine cache, SessionError
   src/lib.rs                    rmcp wrapper: Craws { session, tool_router }, #[tool_router]/#[tool]
-                                (13 tools: open/resize/crop/exposure/grayscale/info/export +
-                                draw_rect/ellipse/line/arrow + overlay/collage), parse_color
-                                (#hex/#RGB/names), #[tool_handler(router=self.tool_router)], get_info;
+                                (14 tools: open/resize/crop/exposure/grayscale/info/export +
+                                draw_rect/ellipse/line/arrow/text + overlay/collage), parse_color
+                                (#hex/#RGB/names), parse_align_x/y, #[tool_handler], get_info;
                                 results are JSON text (image parts get dropped by clients)
+  src/fonts.rs                  port-side font-NAME→path resolution via fontdb (system fonts);
+                                keeps the engine deterministic (engine only sees explicit paths)
   src/main.rs                   bin `craws-mcp`: serve(stdio()); logs to STDERR only (stdout=protocol)
   tests/stdio_protocol.rs       spawns the real binary, full JSON-RPC handshake + batch + error paths
                                 (mirrors pooprusteek's client) — doubles as the demo transcript

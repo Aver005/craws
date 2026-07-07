@@ -1,24 +1,29 @@
 # STATE
 > Live project snapshot. Update on every meaningful change.
-> Last updated: 2026-07-06 — **M0 + M1 + M2 shipped; first BLAZING-debt pass done**: own separable
-> resampler (resize 323→54 ms, 6×, drops `image` dep from engine) + SIMD jpeg encoder (910→375 ms,
-> 2.4×). 54 tests, clippy 0.
+> Last updated: 2026-07-06 — **M1 text-on-image landed** (draw_text: SDF glyph masks via ab_glyph,
+> embedded Cascadia default, font-by-name in the port via fontdb). Code complete, **80 tests pass
+> per-crate**; ⚠️ full-workspace `clippy` NOT re-verified — the dev box has its page file disabled
+> (commit == RAM, exhausted), rustc can't mmap stdlib; domain+engine clippy are 0, mcp clippy pending
+> a machine with commit headroom. Text visual demo also pending (was interrupted).
 
 ## SNAPSHOT
 
 - **M0 core is live.** `craws run pipeline.json --in a.png --out b.webp` end-to-end: 24MP / 4-step
   pipeline now **~336 ms** (was 556; resize step 307→49 ms). Warm slider tweak on a 24MP chain =
   **11.8 ms**; fully-cached op = **85 µs**.
-- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). 13 tools:
+- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). 14 tools:
   `open_image` `resize` `crop` `exposure` `grayscale` `image_info` `export` + **annotation**
-  `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` + **composition** `overlay` `collage`. Image-handle
-  session: each op returns a NEW immutable `image_id` (mirrors engine tiles), shared engine cache
-  across the session. Wired **into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`, entry `craws`;
-  original backed up `.bak-craws`).
+  `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` `draw_text` + **composition** `overlay` `collage`.
+  Image-handle session: each op returns a NEW immutable `image_id` (mirrors engine tiles), shared
+  engine cache across the session. Wired **into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`,
+  entry `craws`; original backed up `.bak-craws`).
 - **M1 killer feature shipped** (owner's doc-automation use case): annotate screenshots with
-  arrows / circles / boxes (color, stroke width, corner radius, fill, opacity) + overlay screenshots
-  + smart auto-layout collages. Verified visually end-to-end over stdio (annotated login mockup +
-  3-shot justified collage). Text-on-image is the agreed next iteration.
+  arrows / circles / boxes (color, stroke width, corner radius, fill, opacity) + **text labels**
+  (font size, font by name/path, align x/y, multi-line, Unicode incl. Cyrillic) + overlay screenshots
+  + smart auto-layout collages. Annotation+compose verified visually end-to-end over stdio; text
+  verified by unit tests (renders Latin/Cyrillic, center-align straddles anchor) — visual demo pending.
+- **Skill**: `skills/craws-mcp/` in the repo is the SOURCE (committed, updated for draw_text). The
+  installed copy at `~/.claude/skills/craws-mcp/` is a deployment artifact — **never edit it**.
 - **M2 spike is live** (`crates/craws-app` Tauri 2 + `app/` React/WebGPU): real window, 24MP sample,
   exposure slider, pan/zoom, live stats overlay, auto-bench. **The stack decision is now proven by
   measurement, not argument** (see M2 SPIKE VERDICT below).
@@ -81,14 +86,16 @@ channel) ~106 ms could use an encode LUT.
 | 2026-07-06 | Real-time brush painting OUT of v1 scope | `[DECIDED]` |
 | 2026-07-06 | Animations: CSS/WAAPI compositor-only; framer-motion rejected | `[DECIDED]` |
 | 2026-07-06 | M0: ops start inside `craws-engine`; global ops (resize) hash at node level | `[DONE]` |
+| 2026-07-06 | Text: `DrawText` carries an explicit font PATH (engine stays deterministic); font-NAME→path resolution (fontdb) lives in the port | `[DONE]` |
+| 2026-07-06 | Annotation rasterizer is our own SDF in linear light (NOT tiny-skia — would clamp HDR / break invariant) | `[DONE]` |
 
 ## BUILD STATUS
 
 | Check | Status |
 |-------|--------|
-| `cargo build --workspace` | Passes |
-| `cargo test --workspace` | **71 passing** (9 domain + 40 engine + 5 codecs + 1+4 cli + 9 mcp-lib/session + 3 mcp-stdio) |
-| `cargo clippy --workspace --all-targets` | **0 warnings** |
+| `cargo build --workspace` | Passes (per-crate) |
+| `cargo test` (per-crate) | **80 passing** (10 domain + 46 engine + 5 codecs + 1+4 cli + 11 mcp-lib/session + 3 mcp-stdio) |
+| `cargo clippy` | domain **0**, engine **0**; **mcp + full-workspace NOT re-run** — dev box page file disabled (commit==RAM exhausted → rustc can't mmap stdlib). Re-run on a box with commit headroom, or use `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0` |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
 | CI | `[DONE]` — **single** `.github/workflows/ci.yml` (staged, no 2nd workflow / no duplicated Build) + `.gitlab-ci.yml` (mirror, already one staged pipeline). Flow: PR / main → `gate` (clippy `-D warnings`·test·bench-compile, **Linux-only**) + `app` (Tauri shell); develop → gate+app → `release-build` (3 OS) → `publish`. **fmt NOT gated.** Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
 | Pre-push gate | `[DONE]` — `.githooks/pre-push` (linter·tests·checker, incl. shell build); `git config core.hooksPath .githooks` set; `scripts/install-hooks.sh` re-arms on clone. Bypass: `git push --no-verify` |
@@ -99,10 +106,11 @@ channel) ~106 ms could use an encode LUT.
 M0, M1, M2-spike all done. Next candidates (owner's call):
 1. **M3 — the editor**: build the real UI on the proven spike (properties panel, linear-chains UI,
    design tokens). Promote spike ad-hoc pieces to infra (tauri-specta, tile streaming, mip base).
-2. **Broaden M1** (annotation + composition DONE 2026-07-06 — draw_rect/ellipse/line/arrow,
-   overlay, collage): remaining — **text-on-image** (next iteration, agreed; glyph masks reuse the
-   draw.rs coverage→composite path), rotate/flip/blur/brightness-contrast, `run_pipeline` (whole JSON
-   in one call), batch-over-folder helper. Watermarking now expressible via overlay + (future) text.
+2. **Broaden M1** (annotation + composition + **text** all DONE 2026-07-06 — draw_rect/ellipse/line/
+   arrow/text, overlay, collage): remaining — rotate/flip/blur/brightness-contrast, `run_pipeline`
+   (whole JSON in one call), batch-over-folder helper. Watermarking now expressible via overlay + text.
+   Text follow-ups: word-wrap (`max_width`), text background/outline, richer shaping (ligatures/bidi).
+   IMMEDIATE: re-run mcp+workspace clippy on a box with commit headroom; run the text visual demo.
 3. **BLAZING debt** (pass #1 done — resize 6× + jpeg 2.4×): remaining — port-level batch parallelism
    (encode many files at once), png encode, export `powf` LUT, and a fully-streaming (no intermediate
    flat) resampler for images that dwarf RAM.

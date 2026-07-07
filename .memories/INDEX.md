@@ -1,9 +1,10 @@
 # .memories INDEX
 > Agent entry point. If you were handed this project cold, START HERE. Last updated: 2026-07-06
 > (M0 engine+CLI, M1 MCP server wired into pooprusteek, M2 Tauri+React spike — ALL shipped.
-> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened: annotation (draw arrow/circle/box in
-> linear-light SDF) + composition (overlay + smart collage) — the doc-automation killer feature,
-> verified visually. 71 tests, clippy 0. Next: text-on-image, then owner's call).
+> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened: annotation + composition + **text**
+> (draw_text: ab_glyph glyph masks, embedded Cascadia, font-by-name via fontdb in the port). 80 tests
+> pass per-crate; ⚠️ workspace clippy + text visual demo unverified (dev box out of commit memory —
+> see STATE). Skill SOURCE is `skills/craws-mcp/` (installed `~/.claude/skills` is off-limits)).
 
 > `CLAUDE.md` at the repo root is the auto-loaded bridge into this folder for Claude Code.
 > Other agents must be told to read `.memories/INDEX.md` first.

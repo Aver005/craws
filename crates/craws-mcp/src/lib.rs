@@ -13,11 +13,12 @@
 //!   read a result and feed its `image_id` into the next call.
 //! - tool/server names avoid `__` (the client splits `mcp__server__tool` on it).
 
+pub mod fonts;
 pub mod session;
 
 pub use session::{ImageRef, Session, SessionError};
 
-use craws_domain::{Filter, OpSpec, Rgba8};
+use craws_domain::{AlignX, AlignY, Filter, OpSpec, Rgba8};
 use craws_engine::compose::CollageOptions;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -163,6 +164,34 @@ pub struct DrawArrowParams {
     /// Arrowhead length in pixels (default 18).
     #[serde(default)]
     pub head_length: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DrawTextParams {
+    pub image_id: String,
+    /// Anchor point; how the text sits on it is set by align_x/align_y.
+    pub x: f32,
+    pub y: f32,
+    /// The text. `\n` starts a new line.
+    pub text: String,
+    /// Hex (#RRGGBB[AA]) or a color name.
+    pub color: String,
+    /// Pixel height (default 24).
+    #[serde(default)]
+    pub font_size: Option<f32>,
+    /// Font family name (resolved from installed fonts) or a .ttf/.otf path.
+    /// Omitted → the built-in default font.
+    #[serde(default)]
+    pub font: Option<String>,
+    /// left | center | right (default left) — horizontal anchoring at x.
+    #[serde(default)]
+    pub align_x: Option<String>,
+    /// top | middle | bottom | baseline (default baseline) — vertical anchoring at y.
+    #[serde(default)]
+    pub align_y: Option<String>,
+    /// Baseline-to-baseline distance for multi-line text (default: font's natural height).
+    #[serde(default)]
+    pub line_height: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -333,6 +362,30 @@ impl Craws {
             .map_err(to_mcp)
     }
 
+    #[tool(description = "Draw a text label (font size, font by name or path, align x/y, multi-line via \\n). \
+                          Use it to caption annotations. Returns a new handle.")]
+    fn draw_text(&self, Parameters(p): Parameters<DrawTextParams>) -> Result<CallToolResult, McpError> {
+        let color = parse_color(&p.color)?;
+        let font = fonts::resolve_font_path(p.font.as_deref());
+        self.session
+            .apply(
+                &p.image_id,
+                OpSpec::DrawText {
+                    x: p.x,
+                    y: p.y,
+                    text: p.text,
+                    color,
+                    font_size: p.font_size.unwrap_or(24.0),
+                    font,
+                    align_x: parse_align_x(p.align_x.as_deref())?,
+                    align_y: parse_align_y(p.align_y.as_deref())?,
+                    line_height: p.line_height,
+                },
+            )
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
     // ── composition ──
     #[tool(description = "Composite one image on top of another at (x,y) with optional opacity. \
                           Result has the base's size. Returns a new handle.")]
@@ -364,6 +417,25 @@ const DEFAULT_HEAD: f32 = 18.0;
 
 fn parse_color_opt(s: Option<&str>) -> Result<Option<Rgba8>, McpError> {
     s.map(parse_color).transpose()
+}
+
+fn parse_align_x(s: Option<&str>) -> Result<AlignX, McpError> {
+    Ok(match s.map(str::trim) {
+        None | Some("") | Some("left") => AlignX::Left,
+        Some("center") => AlignX::Center,
+        Some("right") => AlignX::Right,
+        Some(other) => return Err(McpError::invalid_params(format!("align_x must be left|center|right, got `{other}`"), None)),
+    })
+}
+
+fn parse_align_y(s: Option<&str>) -> Result<AlignY, McpError> {
+    Ok(match s.map(str::trim) {
+        None | Some("") | Some("baseline") => AlignY::Baseline,
+        Some("top") => AlignY::Top,
+        Some("middle") => AlignY::Middle,
+        Some("bottom") => AlignY::Bottom,
+        Some(other) => return Err(McpError::invalid_params(format!("align_y must be top|middle|bottom|baseline, got `{other}`"), None)),
+    })
 }
 
 /// Parse `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, or a common color name.

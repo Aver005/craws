@@ -27,6 +27,9 @@ jpeg-encoder = { version = "0.7", features = ["simd"] }
 clap = { version = "4", features = ["derive"] }
 criterion = "0.5"
 tempfile = "3"
+# text rendering (craws-engine rasterizes glyphs; craws-mcp resolves font names)
+ab_glyph = "0.2"
+fontdb = "0.23"
 # MCP server (craws-mcp)
 rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

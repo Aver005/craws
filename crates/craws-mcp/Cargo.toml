@@ -21,6 +21,7 @@ craws-codecs = { workspace = true }
 rmcp = { workspace = true }
 tokio = { workspace = true }
 schemars = { workspace = true }
+fontdb = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -21,6 +21,15 @@ Deviations from the original plan: tools are one-per-op (chainable via returned 
 single `apply_filter`; `describe_image` deferred (needs vision); the watermark demo needs a compositing
 op that doesn't exist yet, so the shipped demo is resize/adjust/convert batch (the real core value).
 
+### M1+ — Broaden: annotation, composition, text `[DONE 2026-07-06]`
+Doc-automation toolset over the engine: **annotation** (draw_rect/ellipse/line/arrow — own SDF
+rasterizer in linear light) + **composition** (overlay, smart justified-rows collage) + **text**
+(draw_text — ab_glyph glyph masks through the same coverage→composite path; embedded Cascadia default;
+font-by-name resolved in the port via fontdb so the engine stays deterministic). 14 MCP tools total.
+Annotation+compose verified visually; text by unit tests (visual demo pending). ⚠️ workspace clippy
+unverified this session (dev box out of commit memory — see STATE/JOURNAL).
+Text follow-ups: word-wrap, text background/outline, richer shaping.
+
 ### M2 — Viewport bridge spike `[DONE 2026-07-06]` ✅ decision de-risked
 Built `crates/craws-app` (Tauri 2) + `app/` (React/WebGPU): window, 24MP sample, exposure slider,
 pan/zoom, stats overlay, auto-bench. **All exit criteria met** (numbers in STATE + JOURNAL):
