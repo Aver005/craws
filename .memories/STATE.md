@@ -4,8 +4,10 @@
 > (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/spotlight/beautify), compare
 > (diff + change metric), and meta (run_pipeline). New engine module `filter.rs`. Then a **fix + perf
 > pass**: the compose index-hashing bug is **FIXED** (content-addressed via `stamp` + `compose_signature`;
-> 2 regression tests) and **blur/beautify de-allocated** (blur is now tile-row banded/streaming — no
-> full-image flat copies; beautify shadow blurs 1 alpha channel not RGBA). **111 tests pass;
+> 2 regression tests), and a **BLAZING pass** — 16-bit encode LUT (export convert 24MP **106 → 36 ms, ~3×**,
+> no `powf`), tile-direct `blend` (overlay/collage, no per-pixel `pixel()`) + tile-direct redact region
+> reads, blur tile-row banded/streaming (no full-image flat copies), beautify shadow blurs 1 alpha channel.
+> **111 tests pass;
 > `cargo clippy --all-targets -- -D warnings` = 0 across domain+engine+mcp+cli** (build with
 > `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` for commit headroom on the
 > page-file-less box). No open bugs (`BUGS.md`). ⚠️ text/new-op visual demo still un-run.
@@ -74,10 +76,12 @@ optimistic). Design de-risked.
 |---|---|
 | CLI end-to-end: PNG decode → 4-step pipeline → WebP write | **336 ms** (was 556) |
 | ingest sRGB8 → linear f32 tiles | 45–64 ms |
-| export tiles → sRGB8 | ~106 ms |
+| export tiles → sRGB8 (24MP) | **~36 ms** (was ~106; 16-bit encode LUT, no `powf`, ~3×) |
 | exposure over 24MP, cold / **cached** | 49 ms / **85 µs** |
 | resize 6000→1920 Lanczos3, cold | **54 ms** (was 323; own resampler, 6×) |
 | blur 24MP σ=8, cold | **~495 ms** (tile-row banded/streaming — no full-image flat copies) |
+| redact pixelate 3MP region on 24MP, cold | **~33 ms** (tile-direct region read, no `pixel()`) |
+| overlay 2MP top on 24MP | **~18 ms** (tile-direct blend, no per-pixel `pixel()`) |
 | chain (resize+exposure+crop+gray), cold / **slider-tweak warm** | ~85 ms / **11.8 ms** |
 | decode jpeg / png (24MP) | 128 ms / 157 ms |
 | encode jpeg q90 | **375 ms** (was 910; jpeg-encoder SIMD, 2.4×) |
@@ -125,10 +129,11 @@ M0, M1 (broadened to 26 tools), M2-spike all done. Next candidates (owner's call
    H levels · I curves · J white_balance · L gradient_map/duotone · N sharpen/unsharp · O pixelate
    (standalone) · P vignette · V background_removal (AI, `craws-ai`+ort) · W watermark · X device_frame.
    Text follow-ups still open: word-wrap (`max_width`), text background/outline, richer shaping.
-3. **BLAZING debt** (pass #1 resize 6× + jpeg 2.4×; pass #2 blur/beautify de-allocated 2026-07-08):
-   remaining — `redact` `pixelate_region`/`blur_region` + `content_bounds`/`trim` still read through
-   `pixel()` (tile-direct scan is the squeeze); `beautify` still flattens the source+canvas (fine for
-   screenshot-sized inputs); port-level batch encode; png encode; export `powf` LUT. Criterion coverage
-   for the rest of the new ops still owed (only `blur_r8_cold` benched so far).
+3. **BLAZING debt** — pass #1 resize 6× + jpeg 2.4×; pass #2 blur/beautify de-alloc; **pass #3
+   (2026-07-08): encode LUT (convert ~3×), tile-direct `blend` + redact region reads** (`content_bounds`/
+   `trim` were already tile-direct). Remaining: rotate's arbitrary-angle `sample_bilinear` still uses
+   `pixel()` (random access — a flat source or tile-cache sampler); `beautify` flattens source+canvas
+   (fine for screenshot-sized inputs); port-level batch encode; png encode; a fully-streaming resampler.
+   Benched: blur_r8, redact_pixelate, overlay, tiles_to_srgb8; criterion for hue/invert/spotlight owed.
 
 IMMEDIATE: run a fresh visual demo of the new ops (redact/spotlight/beautify/diff on a real screenshot).

@@ -59,6 +59,11 @@ fn blend(base: &TiledImage, top: &TiledImage, x: i32, y: i32, opacity: f32) -> T
     let px1 = (x + ts.width as i32).min(size.width as i32);
     let py1 = (y + ts.height as i32).min(size.height as i32);
 
+    // `top` read once into a contiguous buffer (tile-direct) so the per-pixel blend
+    // indexes flat memory instead of paying a tile lookup (`pixel()`) per sample.
+    let top_flat = top.to_flat_f32();
+    let tw_top = ts.width as usize;
+
     let (cols, rows) = grid_dims(size);
     let tiles: Vec<TileRef> = (0..cols * rows)
         .into_par_iter()
@@ -78,11 +83,12 @@ fn blend(base: &TiledImage, top: &TiledImage, x: i32, y: i32, opacity: f32) -> T
             let mut buf = base.tiles()[index as usize].tile.px.to_vec();
             for ly in ly0..ly1 {
                 let gy = oy + ly;
-                let ty = (gy - y) as u32;
+                let ty = (gy - y) as usize;
                 for lx in lx0..lx1 {
                     let gx = ox + lx;
-                    let tx = (gx - x) as u32;
-                    let s = top.pixel(tx, ty); // linear premultiplied
+                    let tx = (gx - x) as usize;
+                    let ti = (ty * tw_top + tx) * 4;
+                    let s = &top_flat[ti..ti + 4]; // linear premultiplied
                     let a_eff = s[3] * opacity;
                     if a_eff <= 0.0 {
                         continue;

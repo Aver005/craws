@@ -20,8 +20,9 @@ crates/craws-domain/            ZERO-I/O core
 
 crates/craws-engine/            the executor
   src/lib.rs                    re-exports + engine invariants doc
-  src/color.rs                  sRGB⇄linear (decode LUT; encode formula, clamp lives ONLY here) +
-                                float linear_to_srgb_f32 / srgb_to_linear_f32 (used by invert)
+  src/color.rs                  sRGB⇄linear: decode 256-LUT; encode **16-bit LUT** (65536 entries, no
+                                powf on the hot export path — exact for u8 roundtrip; clamp lives ONLY
+                                here) + float linear_to_srgb_f32 / srgb_to_linear_f32 (used by invert)
   src/tile.rs                   Tile (exact-size), TileRef, TiledImage, grid math,
                                 from/to sRGB8 (premultiply here), from/to flat f32, pixel()
   src/hash.rs                   ContentHash + Merkle derivation (src/pw/gl/glt/cmp domains);
@@ -45,8 +46,10 @@ crates/craws-engine/            the executor
                                 (1-channel, for the shadow) + blur (whole image, tile-row BANDED/
                                 STREAMING — streams source rows via copy_row_into, writes tiles direct,
                                 NO full-image flat); redact (pixelate/blur/fill a region, only rect
-                                tiles recompute) via write_region; beautify (rounded corners + 1-channel
-                                soft drop-shadow + padded background, BeautifyParams). Premultiplied linear.
+                                tiles recompute) via write_region; regions read tile-direct via
+                                read_region (row-run gather, no pixel()); opaque fill skips the source
+                                read; beautify (rounded corners + 1-channel soft drop-shadow + padded
+                                background, BeautifyParams). Premultiplied linear.
   src/text.rs                   text layout (ab_glyph: kern, \n, align_x/y) → glyph coverage mask →
                                 draw::composite_mask. TextParams built from OpSpec::DrawText.
   src/fonts.rs                  font loading: embedded default (assets/CascadiaCode.ttf, OFL) +
@@ -57,6 +60,7 @@ crates/craws-engine/            the executor
                                 side_by_side + DiffStats fraction/max) → called directly by the MCP
                                 session. Content-addressed: private blend() builds pixels, then stamp()
                                 re-hashes via hash::compose_signature (fixed the old index-hash bug).
+                                blend reads `top` via one to_flat_f32 then indexes flat (no per-pixel pixel()).
   assets/CascadiaCode.ttf       embedded default font (Microsoft, SIL OFL 1.1)
   assets/CascadiaCode-LICENSE.txt  the font's OFL license (must ship with the font)
   src/engine.rs                 Engine::run — validate → per-step hash/cache/compute → RunStats

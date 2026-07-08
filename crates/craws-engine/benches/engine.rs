@@ -2,8 +2,8 @@
 //! Run: `cargo bench -p craws-engine` (append `-- --quick` for a fast pass).
 //! Record headline numbers in `.memories/JOURNAL/`.
 
-use craws_domain::{Filter, OpSpec, Pipeline, Size};
-use craws_engine::{hash, Engine, TiledImage};
+use craws_domain::{Filter, OpSpec, Pipeline, RedactMode, Size};
+use craws_engine::{compose, hash, Engine, TiledImage};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
 fn synthetic_rgba(size: Size) -> Vec<u8> {
@@ -69,6 +69,18 @@ fn bench_engine(c: &mut Criterion) {
         b.iter_batched(Engine::new, |e| e.run(&img, &blur).unwrap(), BatchSize::PerIteration)
     });
 
+    // redact a large region by mosaic (tile-direct region read, no pixel())
+    let redact = pipeline(vec![OpSpec::Redact {
+        x: 500.0,
+        y: 400.0,
+        width: 2000.0,
+        height: 1500.0,
+        mode: RedactMode::Pixelate { block: 16 },
+    }]);
+    g.bench_function("redact_pixelate_cold", |b| {
+        b.iter_batched(Engine::new, |e| e.run(&img, &redact).unwrap(), BatchSize::PerIteration)
+    });
+
     let chain = pipeline(vec![
         OpSpec::Resize { width: Some(1920), height: None, filter: Filter::Lanczos3 },
         OpSpec::Exposure { stops: 0.5 },
@@ -94,6 +106,13 @@ fn bench_engine(c: &mut Criterion) {
             e.run(&img, &p).unwrap()
         })
     });
+    g.finish();
+
+    // ── composition (multi-input; tile-direct blend, no pixel()) ──
+    let top = TiledImage::from_srgb_rgba8(Size::new(1600, 1200), &synthetic_rgba(Size::new(1600, 1200)), hash::digest_bytes(b"top"));
+    let mut g = c.benchmark_group("compose_24mp");
+    g.sample_size(10);
+    g.bench_function("overlay_2mp_on_24mp", |b| b.iter(|| compose::overlay(&img, &top, 200, 150, 0.9)));
     g.finish();
 }
 

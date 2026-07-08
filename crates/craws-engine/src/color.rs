@@ -1,8 +1,11 @@
 //! sRGB ⇄ linear-light conversions.
 //!
-//! Decode (u8 → f32) goes through a 256-entry LUT. Encode (f32 → u8) uses the
-//! exact transfer formula; it runs tile-parallel in practice. (A quantized
-//! encode LUT is a known micro-opt candidate — measure first.)
+//! Both directions are table-driven. Decode (u8 → f32) is a 256-entry LUT. Encode
+//! (f32 → u8) quantizes the clamped linear value to 16 bits and looks it up in a
+//! 65536-entry LUT — no `powf` on the hot export / viewport-bridge path. The table
+//! is exact for the u8 round-trip (the quantization step, 1/65535, is ~20× finer
+//! than the tightest gap between adjacent sRGB code points, near black) — guarded by
+//! `u8_roundtrip_is_exact`.
 
 use std::sync::LazyLock;
 
@@ -14,6 +17,16 @@ static SRGB_TO_LINEAR: LazyLock<[f32; 256]> = LazyLock::new(|| {
     }
     lut
 });
+
+/// Exact linear→sRGB8 transfer (the formula the encode LUT is baked from).
+fn encode_srgb8(c: f32) -> u8 {
+    let e = if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    (e * 255.0 + 0.5) as u8
+}
+
+/// 16-bit-indexed linear→sRGB8 table (64 KiB), built once.
+static LINEAR_TO_SRGB8: LazyLock<[u8; 65536]> =
+    LazyLock::new(|| std::array::from_fn(|i| encode_srgb8(i as f32 / 65535.0)));
 
 #[inline]
 pub fn srgb8_to_linear(v: u8) -> f32 {
@@ -33,12 +46,12 @@ pub fn rgba8_to_linear_premul(c: craws_domain::Rgba8) -> [f32; 4] {
     ]
 }
 
-/// Clamps to [0, 1] (this is the only place the pipeline clamps) and encodes.
+/// Clamps to [0, 1] (this is the only place the pipeline clamps) and encodes via
+/// the 16-bit LUT — a table lookup, no `powf`.
 #[inline]
 pub fn linear_to_srgb8(v: f32) -> u8 {
-    let c = v.clamp(0.0, 1.0);
-    let e = if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
-    (e * 255.0 + 0.5) as u8
+    let idx = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize;
+    LINEAR_TO_SRGB8[idx & 0xFFFF]
 }
 
 /// Linear-light → sRGB gamma as a float (no quantization). For ops that must

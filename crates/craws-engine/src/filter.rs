@@ -216,26 +216,52 @@ pub fn redact(
     write_region(input, rx0, ry0, rw, rh, &region, tile_hash)
 }
 
-/// Blend a solid `color` over the region (opaque → a black bar; translucent → a tint).
-fn fill_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, color: Rgba8) -> Vec<f32> {
-    let c = rgba8_to_linear_premul(color);
-    let a = c[3];
-    let inv = 1.0 - a;
+/// Copy a rect out of the tiled image into a flat `rw×rh` premultiplied buffer,
+/// tile-direct (row-run gather — no per-pixel `pixel()` lookup). Row-parallel.
+fn read_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; rw as usize * rh as usize * 4];
-    out.par_chunks_exact_mut(rw as usize * 4).enumerate().for_each(|(yy, row)| {
-        let gy = ry0 + yy as u32;
-        for xx in 0..rw as usize {
-            let d = input.pixel(rx0 + xx as u32, gy);
-            row[xx * 4..xx * 4 + 4]
-                .copy_from_slice(&[c[0] + d[0] * inv, c[1] + d[1] * inv, c[2] + d[2] * inv, a + d[3] * inv]);
+    out.par_chunks_exact_mut(rw as usize * 4).enumerate().for_each(|(row, dst)| {
+        let sy = ry0 + row as u32;
+        let s_row = sy / TILE_SIZE;
+        let s_ry = (sy % TILE_SIZE) as usize;
+        let mut ox = 0u32;
+        while ox < rw {
+            let sx = rx0 + ox;
+            let st = &input.tile_at(sx / TILE_SIZE, s_row).tile;
+            let s_rx = (sx % TILE_SIZE) as usize;
+            let run = ((rw - ox) as usize).min(st.width as usize - s_rx);
+            let so = (s_ry * st.width as usize + s_rx) * 4;
+            let d = ox as usize * 4;
+            dst[d..d + run * 4].copy_from_slice(&st.px[so..so + run * 4]);
+            ox += run as u32;
         }
     });
     out
 }
 
+/// Blend a solid `color` over the region (opaque → a black bar, no source read;
+/// translucent → a tint over the tile-direct-read region).
+fn fill_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, color: Rgba8) -> Vec<f32> {
+    let c = rgba8_to_linear_premul(color);
+    let a = c[3];
+    if a >= 1.0 {
+        return std::iter::repeat_n(c, rw as usize * rh as usize).flatten().collect();
+    }
+    let inv = 1.0 - a;
+    let mut region = read_region(input, rx0, ry0, rw, rh);
+    region.par_chunks_exact_mut(4).for_each(|d| {
+        d[0] = c[0] + d[0] * inv;
+        d[1] = c[1] + d[1] * inv;
+        d[2] = c[2] + d[2] * inv;
+        d[3] = a + d[3] * inv;
+    });
+    region
+}
+
 /// Mosaic: average `block`×`block` cells within the region.
 fn pixelate_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, block: u32) -> Vec<f32> {
     let block = block.max(1);
+    let region = read_region(input, rx0, ry0, rw, rh); // tile-direct, once
     let mut out = vec![0.0f32; rw as usize * rh as usize * 4];
     // par over block-rows (each writes a disjoint band; the last may be short)
     out.par_chunks_mut((rw * block) as usize * 4).enumerate().for_each(|(bi, band)| {
@@ -247,9 +273,9 @@ fn pixelate_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, blo
             let mut acc = [0.0f64; 4];
             for yy in 0..bh {
                 for xx in 0..bw {
-                    let p = input.pixel(rx0 + bx + xx, ry0 + by + yy);
-                    for (a, v) in acc.iter_mut().zip(p) {
-                        *a += v as f64;
+                    let o = (((by + yy) * rw + bx + xx) * 4) as usize;
+                    for (a, v) in acc.iter_mut().zip(&region[o..o + 4]) {
+                        *a += *v as f64;
                     }
                 }
             }
@@ -267,16 +293,10 @@ fn pixelate_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, blo
     out
 }
 
-/// Gaussian-blur just the region (extract rect + a 3σ margin, blur, crop back).
+/// Gaussian-blur just the region (extract rect + a 3σ margin tile-direct, blur, crop back).
 fn blur_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, sigma: f32) -> Vec<f32> {
     if sigma <= 0.0 {
-        let mut out = vec![0.0f32; rw as usize * rh as usize * 4];
-        out.par_chunks_exact_mut(rw as usize * 4).enumerate().for_each(|(yy, row)| {
-            for xx in 0..rw as usize {
-                row[xx * 4..xx * 4 + 4].copy_from_slice(&input.pixel(rx0 + xx as u32, ry0 + yy as u32));
-            }
-        });
-        return out;
+        return read_region(input, rx0, ry0, rw, rh);
     }
     let size = input.size();
     let margin = (sigma * 3.0).ceil() as u32;
@@ -285,13 +305,7 @@ fn blur_region(input: &TiledImage, rx0: u32, ry0: u32, rw: u32, rh: u32, sigma: 
     let ex1 = (rx0 + rw + margin).min(size.width);
     let ey1 = (ry0 + rh + margin).min(size.height);
     let (ew, eh) = ((ex1 - ex0) as usize, (ey1 - ey0) as usize);
-    let mut ext = vec![0.0f32; ew * eh * 4];
-    ext.par_chunks_exact_mut(ew * 4).enumerate().for_each(|(yy, row)| {
-        let gy = ey0 + yy as u32;
-        for xx in 0..ew {
-            row[xx * 4..xx * 4 + 4].copy_from_slice(&input.pixel(ex0 + xx as u32, gy));
-        }
-    });
+    let ext = read_region(input, ex0, ey0, ex1 - ex0, ey1 - ey0);
     let blurred = gaussian_blur_flat(&ext, ew, eh, sigma);
     let (ox, oy) = ((rx0 - ex0) as usize, (ry0 - ey0) as usize);
     let mut out = vec![0.0f32; rw as usize * rh as usize * 4];
