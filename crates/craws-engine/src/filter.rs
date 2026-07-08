@@ -69,19 +69,117 @@ pub fn gaussian_blur_flat(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f3
     out
 }
 
+/// Single-channel separable Gaussian blur of a flat `w×h` buffer, edges clamped.
+/// Used for the beautify drop shadow (an alpha silhouette — blurring 1 channel
+/// instead of RGBA is 4× the work and memory saved).
+fn blur1(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+    if sigma <= 0.0 || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let k = gaussian_kernel(sigma);
+    let radius = (k.len() / 2) as i32;
+    let mut tmp = vec![0.0f32; src.len()];
+    tmp.par_chunks_exact_mut(w).enumerate().for_each(|(y, row)| {
+        let base = y * w;
+        for (x, slot) in row.iter_mut().enumerate() {
+            let mut acc = 0.0f32;
+            for (j, &wt) in k.iter().enumerate() {
+                let sx = (x as i32 + j as i32 - radius).clamp(0, w as i32 - 1) as usize;
+                acc += src[base + sx] * wt;
+            }
+            *slot = acc;
+        }
+    });
+    let mut out = vec![0.0f32; src.len()];
+    out.par_chunks_exact_mut(w).enumerate().for_each(|(y, row)| {
+        for (x, slot) in row.iter_mut().enumerate() {
+            let mut acc = 0.0f32;
+            for (j, &wt) in k.iter().enumerate() {
+                let sy = (y as i32 + j as i32 - radius).clamp(0, h as i32 - 1) as usize;
+                acc += tmp[sy * w + x] * wt;
+            }
+            *slot = acc;
+        }
+    });
+    out
+}
+
 /// Whole-image Gaussian blur. `sigma` in pixels; 0 is a no-op (tiles reused).
+///
+/// Tile-row **banded + streaming**: for each row of output tiles, horizontal-blur only
+/// the source rows that band reads (±3σ halo, streamed straight from the tile grid via
+/// `copy_row_into`) into a small band buffer, then vertical-blur that band directly into
+/// the row's output tiles. No full-image flat copy of the input OR output — peak memory
+/// is O(width × (256 + 2·radius)) per active band, independent of image height.
 pub fn blur(
     input: &TiledImage,
     sigma: f32,
     tile_hash: &(dyn Fn(u32) -> ContentHash + Sync),
 ) -> TiledImage {
-    let size = input.size();
     if sigma <= 0.0 {
         return draw::clone_all(input, tile_hash);
     }
-    let flat = input.to_flat_f32();
-    let blurred = gaussian_blur_flat(&flat, size.width as usize, size.height as usize, sigma);
-    TiledImage::from_flat_f32(size, &blurred, tile_hash)
+    let size = input.size();
+    let (w, h) = (size.width as usize, size.height as usize);
+    let k = gaussian_kernel(sigma);
+    let radius = (k.len() / 2) as i32;
+    let (cols, rows) = grid_dims(size);
+
+    let bands: Vec<Vec<TileRef>> = (0..rows)
+        .into_par_iter()
+        .map(|trow| {
+            let band_y0 = trow as usize * TILE_SIZE as usize;
+            let band_h = (h - band_y0).min(TILE_SIZE as usize);
+            // horizontal pass over the rows this band reads: [band_y0-radius, band_y0+band_h+radius)
+            let hy0 = band_y0.saturating_sub(radius as usize);
+            let hy1 = (band_y0 + band_h + radius as usize).min(h);
+            let mut hb = vec![0.0f32; w * (hy1 - hy0) * 4];
+            let mut src = vec![0.0f32; w * 4];
+            for (i, out_row) in hb.chunks_exact_mut(w * 4).enumerate() {
+                input.copy_row_into((hy0 + i) as u32, &mut src);
+                for x in 0..w {
+                    let mut acc = [0.0f32; 4];
+                    for (j, &wt) in k.iter().enumerate() {
+                        let sx = (x as i32 + j as i32 - radius).clamp(0, w as i32 - 1) as usize;
+                        for (a, s) in acc.iter_mut().zip(&src[sx * 4..sx * 4 + 4]) {
+                            *a += s * wt;
+                        }
+                    }
+                    out_row[x * 4..x * 4 + 4].copy_from_slice(&acc);
+                }
+            }
+            // vertical pass: build this tile-row's tiles straight from the band
+            (0..cols)
+                .map(|col| {
+                    let (tw, th) = tile_dims(size, col, trow);
+                    let ox0 = col as usize * TILE_SIZE as usize;
+                    let mut px = vec![0.0f32; (tw * th * 4) as usize];
+                    for ly in 0..th as usize {
+                        let gy = band_y0 + ly;
+                        for lx in 0..tw as usize {
+                            let gx = ox0 + lx;
+                            let mut acc = [0.0f32; 4];
+                            for (j, &wt) in k.iter().enumerate() {
+                                let sy = (gy as i32 + j as i32 - radius).clamp(0, h as i32 - 1) as usize;
+                                let o = ((sy - hy0) * w + gx) * 4;
+                                for (a, s) in acc.iter_mut().zip(&hb[o..o + 4]) {
+                                    *a += s * wt;
+                                }
+                            }
+                            let d = (ly * tw as usize + lx) * 4;
+                            px[d..d + 4].copy_from_slice(&acc);
+                        }
+                    }
+                    TileRef {
+                        hash: tile_hash(trow * cols + col),
+                        tile: Arc::new(Tile::new(tw, th, px.into_boxed_slice())),
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    TiledImage::new(size, bands.into_iter().flatten().collect())
 }
 
 // ── redaction ────────────────────────────────────────────────────────────────
@@ -266,11 +364,6 @@ fn over_px(d: &mut [f32], s: &[f32]) {
     d[3] = s[3] + d[3] * inv;
 }
 
-/// Composite an equal-length premultiplied `src` over `dst`.
-fn over_flat(dst: &mut [f32], src: &[f32]) {
-    dst.par_chunks_exact_mut(4).zip(src.par_chunks_exact(4)).for_each(|(d, s)| over_px(d, s));
-}
-
 /// Composite `src` (`sw×sh`) over `dst` (`dw×dh`) with its top-left at `(ox, oy)`.
 #[allow(clippy::too_many_arguments)]
 fn composite_at(dst: &mut [f32], dw: usize, dh: usize, src: &[f32], sw: usize, sh: usize, ox: usize, oy: usize) {
@@ -326,9 +419,11 @@ pub fn beautify(
     let bg = rgba8_to_linear_premul(p.background);
     let mut canvas: Vec<f32> = std::iter::repeat_n(bg, ow * oh).flatten().collect();
 
-    // 3) soft drop shadow: the rounded silhouette, offset down, blurred, black
+    // 3) soft drop shadow: the rounded silhouette's ALPHA, offset down, blurred as a
+    //    single channel (the shadow is premultiplied black ⇒ RGB≡0), composited under
+    //    the image. Blurring 1 channel instead of RGBA is 4× less work and memory.
     if p.shadow_opacity > 0.0 {
-        let mut shadow = vec![0.0f32; ow * oh * 4];
+        let mut shadow_a = vec![0.0f32; ow * oh];
         let off_y = p.shadow_offset.round() as i64;
         for y in 0..sh {
             let dy = pad as i64 + off_y + y as i64;
@@ -337,12 +432,18 @@ pub fn beautify(
             }
             let drow = dy as usize * ow;
             for x in 0..sw {
-                // premultiplied black: RGB stays 0, alpha carries the silhouette
-                shadow[(drow + pad + x) * 4 + 3] = rsrc[(y * sw + x) * 4 + 3] * p.shadow_opacity;
+                shadow_a[drow + pad + x] = rsrc[(y * sw + x) * 4 + 3] * p.shadow_opacity;
             }
         }
-        let blurred = gaussian_blur_flat(&shadow, ow, oh, p.shadow_radius);
-        over_flat(&mut canvas, &blurred);
+        let blurred = blur1(&shadow_a, ow, oh, p.shadow_radius);
+        // source-over of premultiplied black (rgb 0, alpha a) onto the canvas
+        canvas.par_chunks_exact_mut(4).zip(blurred.par_iter()).for_each(|(d, &a)| {
+            let inv = 1.0 - a;
+            d[0] *= inv;
+            d[1] *= inv;
+            d[2] *= inv;
+            d[3] = a + d[3] * inv;
+        });
     }
 
     // 4) the rounded source, over the shadow, at (pad, pad)

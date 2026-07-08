@@ -2,11 +2,13 @@
 > Live project snapshot. Update on every meaningful change.
 > Last updated: 2026-07-08 — **toolset broadened 14 → 26 MCP tools** across two batches: geometry
 > (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/spotlight/beautify), compare
-> (diff + change metric), and meta (run_pipeline). New engine module `filter.rs`. **109 tests pass;
-> `cargo clippy --all-targets -- -D warnings` = 0 across domain+engine+mcp+cli** — the prior session's
-> mcp/workspace clippy gap is **CLOSED** (built with `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0
-> RUSTFLAGS="-C debuginfo=0"` for commit headroom on the page-file-less box). ⚠️ Latent compose-hash
-> bug logged (`BUGS.md`); text visual demo still un-run.
+> (diff + change metric), and meta (run_pipeline). New engine module `filter.rs`. Then a **fix + perf
+> pass**: the compose index-hashing bug is **FIXED** (content-addressed via `stamp` + `compose_signature`;
+> 2 regression tests) and **blur/beautify de-allocated** (blur is now tile-row banded/streaming — no
+> full-image flat copies; beautify shadow blurs 1 alpha channel not RGBA). **111 tests pass;
+> `cargo clippy --all-targets -- -D warnings` = 0 across domain+engine+mcp+cli** (build with
+> `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` for commit headroom on the
+> page-file-less box). No open bugs (`BUGS.md`). ⚠️ text/new-op visual demo still un-run.
 
 ## SNAPSHOT
 
@@ -75,6 +77,7 @@ optimistic). Design de-risked.
 | export tiles → sRGB8 | ~106 ms |
 | exposure over 24MP, cold / **cached** | 49 ms / **85 µs** |
 | resize 6000→1920 Lanczos3, cold | **54 ms** (was 323; own resampler, 6×) |
+| blur 24MP σ=8, cold | **~495 ms** (tile-row banded/streaming — no full-image flat copies) |
 | chain (resize+exposure+crop+gray), cold / **slider-tweak warm** | ~85 ms / **11.8 ms** |
 | decode jpeg / png (24MP) | 128 ms / 157 ms |
 | encode jpeg q90 | **375 ms** (was 910; jpeg-encoder SIMD, 2.4×) |
@@ -104,7 +107,7 @@ channel) ~106 ms could use an encode LUT.
 | Check | Status |
 |-------|--------|
 | `cargo build --workspace` | Passes (per-crate; `craws-app` not rebuilt this session — untouched, no exhaustive `match OpSpec`) |
-| `cargo test` (per-crate) | **109 passing** (15 domain + 67 engine + 5 codecs + 1+4 cli + 17 mcp-lib/session + 5 mcp-stdio) |
+| `cargo test` (per-crate) | **111 passing** (15 domain + 69 engine + 5 codecs + 1+4 cli + 17 mcp-lib/session + 5 mcp-stdio) |
 | `cargo clippy --all-targets -- -D warnings` | **0 across domain + engine + mcp + cli** ✅ (gap CLOSED). On this page-file-less box use `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` for commit headroom |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
 | CI | `[DONE]` — **single** `.github/workflows/ci.yml` (staged, no 2nd workflow / no duplicated Build) + `.gitlab-ci.yml` (mirror, already one staged pipeline). Flow: PR / main → `gate` (clippy `-D warnings`·test·bench-compile, **Linux-only**) + `app` (Tauri shell); develop → gate+app → `release-build` (3 OS) → `publish`. **fmt NOT gated.** Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
@@ -122,11 +125,10 @@ M0, M1 (broadened to 26 tools), M2-spike all done. Next candidates (owner's call
    H levels · I curves · J white_balance · L gradient_map/duotone · N sharpen/unsharp · O pixelate
    (standalone) · P vignette · V background_removal (AI, `craws-ai`+ort) · W watermark · X device_frame.
    Text follow-ups still open: word-wrap (`max_width`), text background/outline, richer shaping.
-3. **`[BUG]` compose hashing** — `overlay`/`collage`/`diff.side_by_side` hash tiles by index → downstream
-   cache collision risk (`BUGS.md`). Make compose outputs content-addressed when it's worth a focused pass.
-4. **BLAZING debt** (pass #1 done — resize 6× + jpeg 2.4×): the new filters flatten via `to_flat_f32`
-   (blur/beautify) and read through `pixel()` (redact/trim scan) — tile-band streaming + tile-direct
-   scans are the squeeze; also port-level batch encode, png encode, export `powf` LUT. No criterion
-   bench for the new ops yet (proof-over-vibes owed).
+3. **BLAZING debt** (pass #1 resize 6× + jpeg 2.4×; pass #2 blur/beautify de-allocated 2026-07-08):
+   remaining — `redact` `pixelate_region`/`blur_region` + `content_bounds`/`trim` still read through
+   `pixel()` (tile-direct scan is the squeeze); `beautify` still flattens the source+canvas (fine for
+   screenshot-sized inputs); port-level batch encode; png encode; export `powf` LUT. Criterion coverage
+   for the rest of the new ops still owed (only `blur_r8_cold` benched so far).
 
 IMMEDIATE: run a fresh visual demo of the new ops (redact/spotlight/beautify/diff on a real screenshot).

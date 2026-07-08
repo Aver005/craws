@@ -17,7 +17,39 @@ fn hash_by_index(i: u32) -> ContentHash {
 
 /// Composite `top` onto `base` at integer offset `(x, y)` with `opacity` in
 /// [0,1]. Output size = base size. Source-over in linear premultiplied light.
+/// Output tiles are **content-addressed** (folds both inputs' hashes + params via
+/// [`stamp`]) so two different overlays never collide in a downstream cache.
 pub fn overlay(base: &TiledImage, top: &TiledImage, x: i32, y: i32, opacity: f32) -> TiledImage {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let mut params = Vec::with_capacity(16);
+    params.extend_from_slice(b"overlay");
+    params.extend_from_slice(&x.to_le_bytes());
+    params.extend_from_slice(&y.to_le_bytes());
+    params.extend_from_slice(&opacity.to_le_bytes());
+    let sig = hash::compose_signature(
+        &params,
+        base.tiles().iter().chain(top.tiles().iter()).map(|t| &t.hash),
+    );
+    stamp(blend(base, top, x, y, opacity), sig)
+}
+
+/// Re-stamp assembled tiles with content-true identities from `sig` (Arcs/pixels
+/// kept). Compose ops build with throwaway index hashes, then stamp so distinct
+/// inputs/params never share tile identities downstream.
+fn stamp(img: TiledImage, sig: ContentHash) -> TiledImage {
+    let size = img.size();
+    let tiles = img
+        .tiles()
+        .iter()
+        .enumerate()
+        .map(|(i, t)| TileRef { hash: hash::global_tile_hash(sig, i as u32), tile: Arc::clone(&t.tile) })
+        .collect();
+    TiledImage::new(size, tiles)
+}
+
+/// Source-over blend of `top` onto `base` — pixels only, index-hashed; public
+/// callers wrap this with [`stamp`] for content-true identities.
+fn blend(base: &TiledImage, top: &TiledImage, x: i32, y: i32, opacity: f32) -> TiledImage {
     let size = base.size();
     let ts = top.size();
     let opacity = opacity.clamp(0.0, 1.0);
@@ -94,13 +126,21 @@ pub fn collage(images: &[&TiledImage], opts: CollageOptions) -> TiledImage {
     let flat: Vec<f32> = std::iter::repeat_n(bg, canvas.area() as usize).flatten().collect();
     let mut out = TiledImage::from_flat_f32(canvas, &flat, hash_by_index);
 
-    // resize each image to its cell and overlay it
+    // resize each image to its cell and blend it (index-hashed; stamped below)
     for (img, r) in images.iter().zip(&rects) {
         let cell = Size::new(r.width.max(1), r.height.max(1));
         let scaled = ops::resize(img, cell, Filter::Lanczos3, &hash_by_index);
-        out = overlay(&out, &scaled, r.x as i32, r.y as i32, 1.0);
+        out = blend(&out, &scaled, r.x as i32, r.y as i32, 1.0);
     }
-    out
+    // stamp with a content-true signature from the ORIGINAL images + options
+    let mut params = Vec::with_capacity(19);
+    params.extend_from_slice(b"collage");
+    params.extend_from_slice(&opts.target_width.to_le_bytes());
+    params.extend_from_slice(&opts.row_height.to_le_bytes());
+    params.extend_from_slice(&opts.gap.to_le_bytes());
+    params.extend_from_slice(&[opts.background.r, opts.background.g, opts.background.b, opts.background.a]);
+    let sig = hash::compose_signature(&params, images.iter().flat_map(|i| i.tiles().iter().map(|t| &t.hash)));
+    stamp(out, sig)
 }
 
 /// Pure geometry: place `sizes` into justified rows. Returns the canvas size and
@@ -247,8 +287,13 @@ fn side_by_side(a: &TiledImage, b: &TiledImage) -> TiledImage {
     let bg = rgba8_to_linear_premul(Rgba8::rgb(20, 20, 20));
     let flat: Vec<f32> = std::iter::repeat_n(bg, (cw * ch) as usize).flatten().collect();
     let canvas = TiledImage::from_flat_f32(Size::new(cw, ch), &flat, hash_by_index);
-    let canvas = overlay(&canvas, a, 0, 0, 1.0);
-    overlay(&canvas, b, (aw + gap) as i32, 0, 1.0)
+    let canvas = blend(&canvas, a, 0, 0, 1.0);
+    let out = blend(&canvas, b, (aw + gap) as i32, 0, 1.0);
+    let mut params = Vec::with_capacity(16);
+    params.extend_from_slice(b"side_by_side");
+    params.extend_from_slice(&gap.to_le_bytes());
+    let sig = hash::compose_signature(&params, a.tiles().iter().chain(b.tiles().iter()).map(|t| &t.hash));
+    stamp(out, sig)
 }
 
 #[cfg(test)]
@@ -342,5 +387,31 @@ mod tests {
         let (img, s) = diff(&a, &c, DiffView::SideBySide, 0.0);
         assert_eq!(img.size(), Size::new(50 + 8 + 30, 50), "side-by-side canvas");
         assert!(s.fraction.is_none(), "different sizes → no metric");
+    }
+
+    /// Content-addressed solid (distinct `id` ⇒ distinct tile hashes), mirroring how
+    /// real images arrive (`from_srgb_rgba8` with a bytes digest).
+    fn solid_id(w: u32, h: u32, rgb: [u8; 3], id: &[u8]) -> TiledImage {
+        let px: Vec<u8> = std::iter::repeat_n([rgb[0], rgb[1], rgb[2], 255], (w * h) as usize).flatten().collect();
+        TiledImage::from_srgb_rgba8(Size::new(w, h), &px, hash::digest_bytes(id))
+    }
+
+    #[test]
+    fn compose_outputs_are_content_addressed() {
+        // regression for the index-only hashing bug (BUGS.md): different content or
+        // params must produce different tile identities so downstream caches can't collide.
+        let base_a = solid_id(300, 300, [25, 25, 25], b"a");
+        let base_b = solid_id(300, 300, [230, 230, 230], b"b");
+        let top = solid_id(60, 60, [255, 0, 0], b"t");
+        let oa = overlay(&base_a, &top, 10, 10, 1.0);
+        let ob = overlay(&base_b, &top, 10, 10, 1.0);
+        assert_ne!(oa.tiles()[0].hash, ob.tiles()[0].hash, "different base ⇒ different identity");
+        assert_eq!(oa.tiles()[0].hash, overlay(&base_a, &top, 10, 10, 1.0).tiles()[0].hash, "deterministic");
+        assert_ne!(oa.tiles()[0].hash, overlay(&base_a, &top, 20, 10, 1.0).tiles()[0].hash, "params matter");
+
+        let opts = CollageOptions { target_width: 400, row_height: 150, gap: 8, background: Rgba8::rgb(0, 0, 0) };
+        let ca = collage(&[&base_a, &top], opts);
+        let cb = collage(&[&base_b, &top], opts);
+        assert_ne!(ca.tiles()[0].hash, cb.tiles()[0].hash, "collage distinguishes inputs");
     }
 }

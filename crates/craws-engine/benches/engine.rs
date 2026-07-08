@@ -63,6 +63,12 @@ fn bench_engine(c: &mut Criterion) {
         b.iter_batched(Engine::new, |e| e.run(&img, &resize).unwrap(), BatchSize::PerIteration)
     });
 
+    // whole-image Gaussian blur: tile-row banded/streaming (no full-image flat copies)
+    let blur = pipeline(vec![OpSpec::Blur { radius: 8.0 }]);
+    g.bench_function("blur_r8_cold", |b| {
+        b.iter_batched(Engine::new, |e| e.run(&img, &blur).unwrap(), BatchSize::PerIteration)
+    });
+
     let chain = pipeline(vec![
         OpSpec::Resize { width: Some(1920), height: None, filter: Filter::Lanczos3 },
         OpSpec::Exposure { stops: 0.5 },

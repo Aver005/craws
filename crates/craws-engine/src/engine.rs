@@ -399,6 +399,27 @@ mod tests {
     }
 
     #[test]
+    fn compose_outputs_dont_poison_the_cache() {
+        // two DIFFERENT overlays (distinct base pixels + identities), then a cached op on
+        // each: results must differ. Under the old index-only compose hashing the second
+        // reused the first's cached tiles (BUGS.md) — this asserts the fix holds.
+        let solid = |rgb: [u8; 3], tag: &[u8]| {
+            let px: Vec<u8> = std::iter::repeat_n([rgb[0], rgb[1], rgb[2], 255], 300 * 300).flatten().collect();
+            TiledImage::from_srgb_rgba8(Size::new(300, 300), &px, digest_bytes(tag))
+        };
+        let engine = Engine::new();
+        let base_a = solid([20, 40, 60], b"a");
+        let base_b = solid([200, 170, 140], b"b");
+        let top = test_image(60, 60, b"T");
+        let oa = crate::compose::overlay(&base_a, &top, 0, 0, 1.0);
+        let ob = crate::compose::overlay(&base_b, &top, 0, 0, 1.0);
+        let p = pipeline(vec![OpSpec::Exposure { stops: 1.0 }]);
+        let (ea, _) = engine.run(&oa, &p).unwrap();
+        let (eb, _) = engine.run(&ob, &p).unwrap();
+        assert_ne!(ea.to_srgb_rgba8(), eb.to_srgb_rgba8(), "no cross-overlay cache poisoning");
+    }
+
+    #[test]
     fn validation_failure_surfaces() {
         let engine = Engine::new();
         let img = test_image(100, 100, b"src");

@@ -39,9 +39,11 @@ Menu-driven (owner picks lettered options). Landed **12 more tools → 26 total*
   (a whole JSON chain in one call).
 
 Home rule proven twice: single-input & size-computable → `OpSpec` (cached, CLI-usable); multi-input /
-content-dependent-size / meta → session-direct function. **109 tests; clippy `--all-targets -D warnings`
-= 0 across domain+engine+mcp+cli** (the earlier commit-memory gap is closed via `-j1` + no-debuginfo).
-⚠️ Found a latent compose index-hashing bug (`BUGS.md`); a visual eyeball of the new ops is still owed.
+content-dependent-size / meta → session-direct function. Follow-up fix+perf pass (2026-07-08): the
+compose index-hashing bug is FIXED (content-addressed via `stamp`/`compose_signature`), `blur` rewritten
+to tile-row banded/streaming (no full-image flat; ~495 ms @ 24MP σ8), beautify shadow blurs 1 channel.
+**111 tests; clippy `--all-targets -D warnings` = 0 across domain+engine+mcp+cli** (commit-memory gap
+closed via `-j1` + no-debuginfo). No open bugs. A visual eyeball of the new ops is still owed.
 Remaining menu letters (owner's call): E brightness/contrast, F saturation/vibrance, H levels, I curves,
 J white_balance, L gradient_map, N sharpen, O pixelate(standalone), P vignette, V bg-removal(AI),
 W watermark, X device_frame.

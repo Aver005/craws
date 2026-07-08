@@ -1,7 +1,18 @@
 # BUGS
-> Known defects and their status. Last updated: 2026-07-08.
+> Known defects and their status. Last updated: 2026-07-08. **No open bugs.**
 
-## `[BUG]` compose outputs are hashed by tile index, not content
+## `[FIXED 2026-07-08]` compose outputs were hashed by tile index, not content
+
+**Fix:** compose ops now build pixels with throwaway index hashes (a private `blend`), then
+**re-stamp** the assembled tiles with a content-true signature via `compose_signature(params,
+input_tile_hashes…)` + `global_tile_hash` (new `craws/cmp` hash domain). `overlay` folds
+(base+top+x/y/opacity), `collage` folds (all original images + options), `diff.side_by_side` folds
+(a+b+gap). Distinct inputs/params ⇒ distinct identities, so no downstream cache collision.
+Regression tests: `compose::tests::compose_outputs_are_content_addressed` (identity-level) and
+`engine::tests::compose_outputs_dont_poison_the_cache` (end-to-end: two overlays → exposure each →
+results must differ). Both fail on the old code, pass now.
+
+<details><summary>Original report (kept for the record)</summary>
 
 **Where:** `crates/craws-engine/src/compose.rs` — `hash_by_index(i) = digest_bytes(i.to_le_bytes())`
 is used as the `tile_hash` for `overlay`, `collage`, and `diff`'s `side_by_side` layout.
@@ -29,7 +40,8 @@ workflow (overlay a badge on two shots, then tweak both).
 - All `OpSpec` ops go through `run_global`/`run_pointwise`, which hash from op params + real input
   identities — never index-only.
 
-**Fix direction (separate focused task, not done):** give compose outputs content-true identities —
-e.g. derive a signature from the input images' tile hashes + op params (as `run_global` does) and use
-`global_tile_hash(sig, i)`, or route compose through the same signature machinery. Touches
-overlay/collage/side_by_side together. Add the repro above as a regression test when fixing.
+**Fix direction (this is what was implemented):** give compose outputs content-true identities —
+derive a signature from the input images' tile hashes + op params (as `run_global` does) and use
+`global_tile_hash(sig, i)`. Done across overlay/collage/side_by_side via one `stamp` helper.
+
+</details>

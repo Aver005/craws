@@ -3,10 +3,11 @@
 > (M0 engine+CLI, M1 MCP server wired into pooprusteek, M2 Tauri+React spike — ALL shipped.
 > BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened to **26 MCP tools**: annotation + text +
 > composition, then geometry (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/
-> spotlight/beautify — new `filter.rs`), compare (diff+metric), meta (run_pipeline). **109 tests;
-> clippy `--all-targets -D warnings` = 0 across domain+engine+mcp+cli** (commit-memory gap CLOSED via
-> `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0`). ⚠️ latent compose index-hash bug (`BUGS.md`);
-> visual demo of the new ops still owed. Skill SOURCE is `skills/craws-mcp/` (installed
+> spotlight/beautify — new `filter.rs`), compare (diff+metric), meta (run_pipeline). Then a fix+perf
+> pass: compose index-hash bug FIXED (content-addressed), blur rewritten tile-row banded/streaming,
+> beautify shadow 1-channel. **111 tests; clippy `--all-targets -D warnings` = 0 across
+> domain+engine+mcp+cli** (commit-memory gap CLOSED via `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0`).
+> No open bugs. Visual demo of the new ops still owed. Skill SOURCE is `skills/craws-mcp/` (installed
 > `~/.claude/skills` is off-limits)).
 
 > `CLAUDE.md` at the repo root is the auto-loaded bridge into this folder for Claude Code.
@@ -41,7 +42,7 @@ polish-phase item; it shapes every design decision from day one. Concretely:
 | 7 | `JOURNAL/` | Dated log of sessions and decisions |
 
 ### Also present
-| `BUGS.md` | Known defects (currently: compose index-hashing collision risk) |
+| `BUGS.md` | Defect log — no open bugs (compose index-hashing fixed 2026-07-08) |
 
 ### Appear later (create when there is content, not before)
 `GLOSSARY.md` · `LEARNINGS.md` · `reference/` (deep dives: ENGINE, BRIDGE, MCP…)

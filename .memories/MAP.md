@@ -24,7 +24,8 @@ crates/craws-engine/            the executor
                                 float linear_to_srgb_f32 / srgb_to_linear_f32 (used by invert)
   src/tile.rs                   Tile (exact-size), TileRef, TiledImage, grid math,
                                 from/to sRGB8 (premultiply here), from/to flat f32, pixel()
-  src/hash.rs                   ContentHash + Merkle derivation (src/pw/gl/glt domains)
+  src/hash.rs                   ContentHash + Merkle derivation (src/pw/gl/glt/cmp domains);
+                                compose_signature (params ⊕ input tile hashes) for multi-input ops
   src/cache.rs                  TileCache: LRU by byte budget (HashMap + BTreeMap recency)
   src/ops.rs                    kernels: exposure, grayscale, hue_rotate (+hue_matrix, SVG luma-preserving),
                                 invert (perceptual sRGB), crop (row-run gather), resize (→resample),
@@ -40,11 +41,12 @@ crates/craws-engine/            the executor
                                 whole-image); 1px AA coverage composited in LINEAR light; only bbox tiles
                                 recompute. Paint = linear premul. pub composite_mask (→text); pub
                                 clone_all; sd_round_rect/aa are pub(crate) (reused by filter::beautify).
-  src/filter.rs                 neighborhood ops: gaussian_blur_flat (separable, 2 rayon passes) +
-                                blur (whole image); redact (pixelate/blur/fill a region, only rect
-                                tiles recompute) via write_region; beautify (rounded corners + soft
-                                drop-shadow silhouette blur + padded background, BeautifyParams). All
-                                premultiplied linear. ⚠️ blur/beautify use to_flat_f32 (perf TODO).
+  src/filter.rs                 neighborhood ops: gaussian_blur_flat (used by blur_region) + blur1
+                                (1-channel, for the shadow) + blur (whole image, tile-row BANDED/
+                                STREAMING — streams source rows via copy_row_into, writes tiles direct,
+                                NO full-image flat); redact (pixelate/blur/fill a region, only rect
+                                tiles recompute) via write_region; beautify (rounded corners + 1-channel
+                                soft drop-shadow + padded background, BeautifyParams). Premultiplied linear.
   src/text.rs                   text layout (ab_glyph: kern, \n, align_x/y) → glyph coverage mask →
                                 draw::composite_mask. TextParams built from OpSpec::DrawText.
   src/fonts.rs                  font loading: embedded default (assets/CascadiaCode.ttf, OFL) +
@@ -53,7 +55,8 @@ crates/craws-engine/            the executor
                                 image at x,y + opacity) + collage (justified-rows layout by aspect,
                                 each full row fills width) + diff (DiffView difference/heatmap/
                                 side_by_side + DiffStats fraction/max) → called directly by the MCP
-                                session. ⚠️ overlay/collage/side_by_side hash tiles by index (BUGS.md).
+                                session. Content-addressed: private blend() builds pixels, then stamp()
+                                re-hashes via hash::compose_signature (fixed the old index-hash bug).
   assets/CascadiaCode.ttf       embedded default font (Microsoft, SIL OFL 1.1)
   assets/CascadiaCode-LICENSE.txt  the font's OFL license (must ship with the font)
   src/engine.rs                 Engine::run — validate → per-step hash/cache/compute → RunStats

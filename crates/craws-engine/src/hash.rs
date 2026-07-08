@@ -9,6 +9,7 @@
 //! - pointwise tile:   `H("craws/pw"  ‖ op_digest ‖ input_tile_hash)`
 //! - global signature: `H("craws/gl"  ‖ op_digest ‖ input_tile_hashes…)`
 //! - global out tile:  `H("craws/glt" ‖ signature ‖ tile_index)`
+//! - compose signature:`H("craws/cmp" ‖ params ‖ input_tile_hashes…)` (multi-input ops)
 
 use craws_domain::OpSpec;
 
@@ -62,6 +63,24 @@ pub fn global_signature<'a>(
 
 pub fn global_tile_hash(signature: ContentHash, tile_index: u32) -> ContentHash {
     derive(b"craws/glt", &[&signature.0, &tile_index.to_le_bytes()])
+}
+
+/// Signature for a multi-input compose op (overlay/collage/side-by-side): a params
+/// blob folded with every input tile hash, in order. Output tiles then use
+/// [`global_tile_hash`]. This keeps compose outputs **content-addressed** — distinct
+/// inputs or params yield distinct tile identities, so a cached op layered on top of
+/// two different compose results can't collide (the bug this fixes).
+pub fn compose_signature<'a>(
+    params: &[u8],
+    inputs: impl IntoIterator<Item = &'a ContentHash>,
+) -> ContentHash {
+    let mut h = blake3::Hasher::new();
+    h.update(b"craws/cmp");
+    h.update(params);
+    for i in inputs {
+        h.update(&i.0);
+    }
+    ContentHash(*h.finalize().as_bytes())
 }
 
 fn derive(tag: &[u8], parts: &[&[u8]]) -> ContentHash {
