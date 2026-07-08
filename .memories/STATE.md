@@ -1,35 +1,45 @@
 # STATE
 > Live project snapshot. Update on every meaningful change.
-> Last updated: 2026-07-06 — **M1 text-on-image landed** (draw_text: SDF glyph masks via ab_glyph,
-> embedded Cascadia default, font-by-name in the port via fontdb). Code complete, **80 tests pass
-> per-crate**; ⚠️ full-workspace `clippy` NOT re-verified — the dev box has its page file disabled
-> (commit == RAM, exhausted), rustc can't mmap stdlib; domain+engine clippy are 0, mcp clippy pending
-> a machine with commit headroom. Text visual demo also pending (was interrupted).
+> Last updated: 2026-07-08 — **toolset broadened 14 → 26 MCP tools** across two batches: geometry
+> (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/spotlight/beautify), compare
+> (diff + change metric), and meta (run_pipeline). New engine module `filter.rs`. **109 tests pass;
+> `cargo clippy --all-targets -- -D warnings` = 0 across domain+engine+mcp+cli** — the prior session's
+> mcp/workspace clippy gap is **CLOSED** (built with `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0
+> RUSTFLAGS="-C debuginfo=0"` for commit headroom on the page-file-less box). ⚠️ Latent compose-hash
+> bug logged (`BUGS.md`); text visual demo still un-run.
 
 ## SNAPSHOT
 
 - **M0 core is live.** `craws run pipeline.json --in a.png --out b.webp` end-to-end: 24MP / 4-step
   pipeline now **~336 ms** (was 556; resize step 307→49 ms). Warm slider tweak on a 24MP chain =
   **11.8 ms**; fully-cached op = **85 µs**.
-- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). 14 tools:
-  `open_image` `resize` `crop` `exposure` `grayscale` `image_info` `export` + **annotation**
-  `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` `draw_text` + **composition** `overlay` `collage`.
+- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). **26 tools**:
+  - I/O: `open_image` `image_info` `export`
+  - transform (OpSpec): `resize` `crop` `rotate` `flip` `pad` `exposure` `grayscale` `hue_rotate` `invert`
+  - filter (OpSpec): `blur` `redact` `spotlight` `beautify`
+  - annotation (OpSpec): `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` `draw_text`
+  - session-direct (multi-input / content-dependent / meta): `overlay` `collage` `trim` `diff` `run_pipeline`
+
   Image-handle session: each op returns a NEW immutable `image_id` (mirrors engine tiles), shared
   engine cache across the session. Wired **into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`,
-  entry `craws`; original backed up `.bak-craws`).
-- **M1 killer feature shipped** (owner's doc-automation use case): annotate screenshots with
-  arrows / circles / boxes (color, stroke width, corner radius, fill, opacity) + **text labels**
-  (font size, font by name/path, align x/y, multi-line, Unicode incl. Cyrillic) + overlay screenshots
-  + smart auto-layout collages. Annotation+compose verified visually end-to-end over stdio; text
-  verified by unit tests (renders Latin/Cyrillic, center-align straddles anchor) — visual demo pending.
+  entry `craws`; original backed up `.bak-craws`) — the 12 new tools appear automatically (schema is
+  discovered via `tools/list`).
+- **M1 killer feature shipped** (owner's doc-automation use case): annotate screenshots (arrows /
+  circles / boxes / text) + **redact** secrets (pixelate/blur/black-bar) + **spotlight** a region +
+  one-shot **beautify** (rounded corners + soft shadow + padded background) + **diff** two shots with a
+  change metric (visual-regression) + geometry (rotate/flip/pad/**trim** whitespace) + overlay/collage +
+  **run_pipeline** (a whole JSON chain in one call). Annotation/compose/geometry verified end-to-end
+  over stdio (incl. a pad→trim round-trip and a hue+invert+blur→redact→spotlight→beautify→diff chain);
+  text + the new color/filter ops verified by unit tests — a fresh visual eyeball is still owed.
 - **Skill**: `skills/craws-mcp/` in the repo is the SOURCE (committed, updated for draw_text). The
   installed copy at `~/.claude/skills/craws-mcp/` is a deployment artifact — **never edit it**.
 - **M2 spike is live** (`crates/craws-app` Tauri 2 + `app/` React/WebGPU): real window, 24MP sample,
   exposure slider, pan/zoom, live stats overlay, auto-bench. **The stack decision is now proven by
   measurement, not argument** (see M2 SPIKE VERDICT below).
-- Crates: `craws-domain` (types+validation+color), `craws-engine` (tiles/hash/cache/ops/resample/
-  **draw** (SDF rasterizer)/**compose** (overlay+collage)), `craws-codecs` (png/jpeg/webp),
-  `craws-cli` (bin `craws`), `craws-mcp` (rmcp stdio server + testable `Session`), `craws-app` (Tauri 2).
+- Crates: `craws-domain` (types+validation+color; 18 `OpSpec` variants + `FlipAxis`/`RedactMode`),
+  `craws-engine` (tiles/hash/cache/ops/resample/**draw** (SDF + spotlight)/**filter** (blur/redact/
+  beautify)/**compose** (overlay/collage/diff)), `craws-codecs` (png/jpeg/webp), `craws-cli`
+  (bin `craws`), `craws-mcp` (rmcp stdio server + testable `Session`), `craws-app` (Tauri 2).
 - Front: `app/` — Vite + React 19 + TS + Tailwind 4 + WebGPU. No animation lib (framer-motion
   rejected). tauri-specta not wired yet (M3).
 - UI stack `[DECIDED]`: Tauri 2 + React; animations CSS/WAAPI-only.
@@ -93,9 +103,9 @@ channel) ~106 ms could use an encode LUT.
 
 | Check | Status |
 |-------|--------|
-| `cargo build --workspace` | Passes (per-crate) |
-| `cargo test` (per-crate) | **80 passing** (10 domain + 46 engine + 5 codecs + 1+4 cli + 11 mcp-lib/session + 3 mcp-stdio) |
-| `cargo clippy` | domain **0**, engine **0**; **mcp + full-workspace NOT re-run** — dev box page file disabled (commit==RAM exhausted → rustc can't mmap stdlib). Re-run on a box with commit headroom, or use `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0` |
+| `cargo build --workspace` | Passes (per-crate; `craws-app` not rebuilt this session — untouched, no exhaustive `match OpSpec`) |
+| `cargo test` (per-crate) | **109 passing** (15 domain + 67 engine + 5 codecs + 1+4 cli + 17 mcp-lib/session + 5 mcp-stdio) |
+| `cargo clippy --all-targets -- -D warnings` | **0 across domain + engine + mcp + cli** ✅ (gap CLOSED). On this page-file-less box use `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` for commit headroom |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
 | CI | `[DONE]` — **single** `.github/workflows/ci.yml` (staged, no 2nd workflow / no duplicated Build) + `.gitlab-ci.yml` (mirror, already one staged pipeline). Flow: PR / main → `gate` (clippy `-D warnings`·test·bench-compile, **Linux-only**) + `app` (Tauri shell); develop → gate+app → `release-build` (3 OS) → `publish`. **fmt NOT gated.** Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
 | Pre-push gate | `[DONE]` — `.githooks/pre-push` (linter·tests·checker, incl. shell build); `git config core.hooksPath .githooks` set; `scripts/install-hooks.sh` re-arms on clone. Bypass: `git push --no-verify` |
@@ -103,14 +113,20 @@ channel) ~106 ms could use an encode LUT.
 
 ## CURRENT FOCUS
 
-M0, M1, M2-spike all done. Next candidates (owner's call):
+M0, M1 (broadened to 26 tools), M2-spike all done. Next candidates (owner's call):
 1. **M3 — the editor**: build the real UI on the proven spike (properties panel, linear-chains UI,
    design tokens). Promote spike ad-hoc pieces to infra (tauri-specta, tile streaming, mip base).
-2. **Broaden M1** (annotation + composition + **text** all DONE 2026-07-06 — draw_rect/ellipse/line/
-   arrow/text, overlay, collage): remaining — rotate/flip/blur/brightness-contrast, `run_pipeline`
-   (whole JSON in one call), batch-over-folder helper. Watermarking now expressible via overlay + text.
-   Text follow-ups: word-wrap (`max_width`), text background/outline, richer shaping (ligatures/bidi).
-   IMMEDIATE: re-run mcp+workspace clippy on a box with commit headroom; run the text visual demo.
-3. **BLAZING debt** (pass #1 done — resize 6× + jpeg 2.4×): remaining — port-level batch parallelism
-   (encode many files at once), png encode, export `powf` LUT, and a fully-streaming (no intermediate
-   flat) resampler for images that dwarf RAM.
+2. **Finish the tool menu** — owner is picking from a lettered ~24-option list. DONE so far:
+   A rotate · B flip · C pad · D trim · G hue_rotate · K invert · M blur · Q redact · R spotlight ·
+   S beautify · T diff · U run_pipeline. REMAINING letters: E brightness/contrast · F saturation/vibrance ·
+   H levels · I curves · J white_balance · L gradient_map/duotone · N sharpen/unsharp · O pixelate
+   (standalone) · P vignette · V background_removal (AI, `craws-ai`+ort) · W watermark · X device_frame.
+   Text follow-ups still open: word-wrap (`max_width`), text background/outline, richer shaping.
+3. **`[BUG]` compose hashing** — `overlay`/`collage`/`diff.side_by_side` hash tiles by index → downstream
+   cache collision risk (`BUGS.md`). Make compose outputs content-addressed when it's worth a focused pass.
+4. **BLAZING debt** (pass #1 done — resize 6× + jpeg 2.4×): the new filters flatten via `to_flat_f32`
+   (blur/beautify) and read through `pixel()` (redact/trim scan) — tile-band streaming + tile-direct
+   scans are the squeeze; also port-level batch encode, png encode, export `powf` LUT. No criterion
+   bench for the new ops yet (proof-over-vibes owed).
+
+IMMEDIATE: run a fresh visual demo of the new ops (redact/spotlight/beautify/diff on a real screenshot).

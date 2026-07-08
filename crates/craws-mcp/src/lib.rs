@@ -18,8 +18,8 @@ pub mod session;
 
 pub use session::{ImageRef, Session, SessionError};
 
-use craws_domain::{AlignX, AlignY, Filter, OpSpec, Rgba8};
-use craws_engine::compose::CollageOptions;
+use craws_domain::{AlignX, AlignY, Filter, FlipAxis, OpSpec, Pipeline, RedactMode, Rgba8};
+use craws_engine::compose::{CollageOptions, DiffView};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, ProtocolVersion, ServerCapabilities, ServerInfo};
@@ -228,6 +228,156 @@ pub struct CollageParams {
     pub background: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RotateParams {
+    pub image_id: String,
+    /// Clockwise rotation in degrees. Multiples of 90 are lossless; other angles resample.
+    pub degrees: f32,
+    /// Grow the canvas to fit the rotated image (default true). False keeps the
+    /// original size and clips the rotated corners.
+    #[serde(default)]
+    pub expand: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FlipParams {
+    pub image_id: String,
+    /// `horizontal` (mirror left↔right) or `vertical` (top↔bottom).
+    pub axis: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PadParams {
+    pub image_id: String,
+    /// Padding applied to every side left unset — convenient uniform margin.
+    #[serde(default)]
+    pub all: Option<u32>,
+    #[serde(default)]
+    pub left: Option<u32>,
+    #[serde(default)]
+    pub right: Option<u32>,
+    #[serde(default)]
+    pub top: Option<u32>,
+    #[serde(default)]
+    pub bottom: Option<u32>,
+    /// Border fill color (hex or name). Default transparent.
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TrimParams {
+    pub image_id: String,
+    /// Background color to remove (hex or name). Omit to auto-detect from the
+    /// top-left pixel — trims solid or transparent margins alike.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Match tolerance 0..1 in linear light (default 0.01) to absorb JPEG/AA noise.
+    #[serde(default)]
+    pub tolerance: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HueRotateParams {
+    pub image_id: String,
+    /// Hue rotation in degrees (0..360); luminance is preserved.
+    pub degrees: f32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BlurParams {
+    pub image_id: String,
+    /// Blur strength — the Gaussian sigma in pixels (0 = no-op).
+    pub radius: f32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RedactParams {
+    pub image_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// pixelate (default) | blur | fill.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Mosaic cell size for `pixelate` (default 12).
+    #[serde(default)]
+    pub block: Option<u32>,
+    /// Blur sigma for `blur` (default 12).
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// Bar color for `fill` (hex/name, default black).
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SpotlightParams {
+    pub image_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Rounded window corners (default 0 = sharp).
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// Veil opacity outside the window, 0..1 (default 0.55).
+    #[serde(default)]
+    pub dim: Option<f32>,
+    /// Veil color (hex/name, default black).
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Soft edge width in pixels (default 0 = crisp).
+    #[serde(default)]
+    pub feather: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BeautifyParams {
+    pub image_id: String,
+    /// Background margin around the image in pixels (default 64).
+    #[serde(default)]
+    pub padding: Option<u32>,
+    /// Image corner rounding (default 16).
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// Drop-shadow softness (blur sigma, default 24).
+    #[serde(default)]
+    pub shadow_radius: Option<f32>,
+    /// Drop-shadow opacity 0..1 (default 0.35).
+    #[serde(default)]
+    pub shadow_opacity: Option<f32>,
+    /// Drop-shadow vertical offset in pixels (default 12).
+    #[serde(default)]
+    pub shadow_offset: Option<f32>,
+    /// Frame background color (hex/name, default transparent).
+    #[serde(default)]
+    pub background: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiffParams {
+    /// Baseline image.
+    pub a_id: String,
+    /// Image to compare against the baseline.
+    pub b_id: String,
+    /// heatmap (default) | difference | side_by_side.
+    #[serde(default)]
+    pub view: Option<String>,
+    /// Per-channel change threshold 0..1 for the metric (default 0 = any change).
+    #[serde(default)]
+    pub threshold: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RunPipelineParams {
+    pub image_id: String,
+    /// A JSON pipeline: a bare array of op objects, or `{ "version": 0, "steps": [...] }`.
+    /// Ops match the pipeline format (e.g. {"op":"resize","width":800}).
+    pub pipeline: String,
+}
+
 // ── tools ───────────────────────────────────────────────────────────────────
 
 #[tool_router]
@@ -410,10 +560,160 @@ impl Craws {
         };
         self.session.collage(&p.image_ids, opts).map(ref_result).map_err(to_mcp)
     }
+
+    // ── geometry ──
+    #[tool(description = "Rotate an image clockwise by `degrees`. Multiples of 90 are lossless; other angles \
+                          resample with transparent corners. `expand` (default true) grows the canvas to fit. Returns a new handle.")]
+    fn rotate(&self, Parameters(p): Parameters<RotateParams>) -> Result<CallToolResult, McpError> {
+        self.session
+            .apply(&p.image_id, OpSpec::Rotate { degrees: p.degrees, expand: p.expand.unwrap_or(true) })
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Mirror an image across an axis: axis = horizontal (left↔right) or vertical (top↔bottom). Returns a new handle.")]
+    fn flip(&self, Parameters(p): Parameters<FlipParams>) -> Result<CallToolResult, McpError> {
+        self.session
+            .apply(&p.image_id, OpSpec::Flip { axis: parse_axis(&p.axis)? })
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Extend the canvas with a margin — `all` for uniform padding, or per-side left/right/top/bottom. \
+                          Default color transparent. Handy for breathing room before a shadow/background. Returns a new handle.")]
+    fn pad(&self, Parameters(p): Parameters<PadParams>) -> Result<CallToolResult, McpError> {
+        let a = p.all.unwrap_or(0);
+        let color = match p.color.as_deref() {
+            Some(s) => parse_color(s)?,
+            None => Rgba8::new(0, 0, 0, 0),
+        };
+        self.session
+            .apply(
+                &p.image_id,
+                OpSpec::Pad {
+                    left: p.left.unwrap_or(a),
+                    right: p.right.unwrap_or(a),
+                    top: p.top.unwrap_or(a),
+                    bottom: p.bottom.unwrap_or(a),
+                    color,
+                },
+            )
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Auto-crop a uniform border (whitespace, a solid background, or transparency). `color` overrides \
+                          the detected background; `tolerance` (0..1) absorbs JPEG/anti-aliasing noise. Returns a new handle.")]
+    fn trim(&self, Parameters(p): Parameters<TrimParams>) -> Result<CallToolResult, McpError> {
+        let color = parse_color_opt(p.color.as_deref())?;
+        self.session
+            .trim(&p.image_id, color, p.tolerance.unwrap_or(DEFAULT_TRIM_TOLERANCE))
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    // ── color ──
+    #[tool(description = "Rotate the hue of every pixel by `degrees` (0..360), preserving luminance. Returns a new handle.")]
+    fn hue_rotate(&self, Parameters(p): Parameters<HueRotateParams>) -> Result<CallToolResult, McpError> {
+        self.session.apply(&p.image_id, OpSpec::HueRotate { degrees: p.degrees }).map(ref_result).map_err(to_mcp)
+    }
+
+    #[tool(description = "Invert colors (photographic negative), computed in perceptual sRGB space. Returns a new handle.")]
+    fn invert(&self, Parameters(p): Parameters<ImageIdParams>) -> Result<CallToolResult, McpError> {
+        self.session.apply(&p.image_id, OpSpec::Invert).map(ref_result).map_err(to_mcp)
+    }
+
+    // ── filter ──
+    #[tool(description = "Gaussian-blur an image; `radius` is the blur strength (Gaussian sigma in pixels). Returns a new handle.")]
+    fn blur(&self, Parameters(p): Parameters<BlurParams>) -> Result<CallToolResult, McpError> {
+        self.session.apply(&p.image_id, OpSpec::Blur { radius: p.radius }).map(ref_result).map_err(to_mcp)
+    }
+
+    #[tool(description = "Censor a rectangular region — the secret-hiding tool. mode = pixelate (default) | blur | fill; \
+                          give `block` for pixelate, `radius` for blur, `color` for fill. Returns a new handle.")]
+    fn redact(&self, Parameters(p): Parameters<RedactParams>) -> Result<CallToolResult, McpError> {
+        let mode = parse_redact_mode(p.mode.as_deref(), p.block, p.radius, p.color.as_deref())?;
+        self.session
+            .apply(&p.image_id, OpSpec::Redact { x: p.x, y: p.y, width: p.width, height: p.height, mode })
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Spotlight a region: dim everything outside the (optionally rounded, feathered) rectangle to draw \
+                          the eye to it. `dim` is the veil strength 0..1 (default 0.55). Returns a new handle.")]
+    fn spotlight(&self, Parameters(p): Parameters<SpotlightParams>) -> Result<CallToolResult, McpError> {
+        let color = match p.color.as_deref() {
+            Some(s) => parse_color(s)?,
+            None => Rgba8::rgb(0, 0, 0),
+        };
+        self.session
+            .apply(
+                &p.image_id,
+                OpSpec::Spotlight {
+                    x: p.x,
+                    y: p.y,
+                    width: p.width,
+                    height: p.height,
+                    corner_radius: p.corner_radius.unwrap_or(0.0),
+                    dim: p.dim.unwrap_or(0.55),
+                    color,
+                    feather: p.feather.unwrap_or(0.0),
+                },
+            )
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Polish a screenshot: round its corners, add a soft drop shadow, and frame it with padding of a \
+                          background color. The one-shot \"make this look good\" tool. Returns a new handle.")]
+    fn beautify(&self, Parameters(p): Parameters<BeautifyParams>) -> Result<CallToolResult, McpError> {
+        let background = match p.background.as_deref() {
+            Some(s) => parse_color(s)?,
+            None => Rgba8::new(0, 0, 0, 0),
+        };
+        self.session
+            .apply(
+                &p.image_id,
+                OpSpec::Beautify {
+                    padding: p.padding.unwrap_or(64),
+                    corner_radius: p.corner_radius.unwrap_or(16.0),
+                    shadow_radius: p.shadow_radius.unwrap_or(24.0),
+                    shadow_opacity: p.shadow_opacity.unwrap_or(0.35),
+                    shadow_offset: p.shadow_offset.unwrap_or(12.0),
+                    background,
+                },
+            )
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    // ── compare / meta ──
+    #[tool(description = "Compare two images: view = heatmap (default) | difference | side_by_side. Returns a new handle \
+                          PLUS a change metric (fraction_changed, max_difference) — gold for visual-regression checks.")]
+    fn diff(&self, Parameters(p): Parameters<DiffParams>) -> Result<CallToolResult, McpError> {
+        let view = parse_diff_view(p.view.as_deref())?;
+        let r = self.session.diff(&p.a_id, &p.b_id, view, p.threshold.unwrap_or(0.0)).map_err(to_mcp)?;
+        let json = serde_json::json!({
+            "image_id": r.image.id,
+            "width": r.image.width,
+            "height": r.image.height,
+            "fraction_changed": r.fraction,
+            "max_difference": r.max,
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(description = "Run a whole pipeline on an image in one call — `pipeline` is a JSON array of op objects (or \
+                          {\"steps\":[...]}). Chains many edits at once for automation. Returns the final handle.")]
+    fn run_pipeline(&self, Parameters(p): Parameters<RunPipelineParams>) -> Result<CallToolResult, McpError> {
+        let pipeline = parse_pipeline(&p.pipeline)?;
+        self.session.run_pipeline(&p.image_id, &pipeline).map(ref_result).map_err(to_mcp)
+    }
 }
 
 const DEFAULT_STROKE: f32 = 3.0;
 const DEFAULT_HEAD: f32 = 18.0;
+const DEFAULT_TRIM_TOLERANCE: f32 = 0.01;
 
 fn parse_color_opt(s: Option<&str>) -> Result<Option<Rgba8>, McpError> {
     s.map(parse_color).transpose()
@@ -436,6 +736,54 @@ fn parse_align_y(s: Option<&str>) -> Result<AlignY, McpError> {
         Some("bottom") => AlignY::Bottom,
         Some(other) => return Err(McpError::invalid_params(format!("align_y must be top|middle|bottom|baseline, got `{other}`"), None)),
     })
+}
+
+fn parse_axis(s: &str) -> Result<FlipAxis, McpError> {
+    Ok(match s.trim().to_ascii_lowercase().as_str() {
+        "horizontal" | "h" | "x" => FlipAxis::Horizontal,
+        "vertical" | "v" | "y" => FlipAxis::Vertical,
+        other => return Err(McpError::invalid_params(format!("axis must be horizontal|vertical, got `{other}`"), None)),
+    })
+}
+
+fn parse_redact_mode(
+    mode: Option<&str>,
+    block: Option<u32>,
+    radius: Option<f32>,
+    color: Option<&str>,
+) -> Result<RedactMode, McpError> {
+    Ok(match mode.unwrap_or("pixelate").trim().to_ascii_lowercase().as_str() {
+        "" | "pixelate" | "mosaic" => RedactMode::Pixelate { block: block.unwrap_or(12).max(1) },
+        "blur" => RedactMode::Blur { radius: radius.unwrap_or(12.0) },
+        "fill" | "solid" | "bar" => RedactMode::Fill {
+            color: match color {
+                Some(s) => parse_color(s)?,
+                None => Rgba8::rgb(0, 0, 0),
+            },
+        },
+        other => return Err(McpError::invalid_params(format!("redact mode must be pixelate|blur|fill, got `{other}`"), None)),
+    })
+}
+
+fn parse_diff_view(s: Option<&str>) -> Result<DiffView, McpError> {
+    Ok(match s.map(str::trim) {
+        None | Some("") | Some("heatmap") => DiffView::Heatmap,
+        Some("difference") | Some("diff") => DiffView::Difference,
+        Some("side_by_side") | Some("side-by-side") | Some("sxs") => DiffView::SideBySide,
+        Some(other) => return Err(McpError::invalid_params(format!("view must be heatmap|difference|side_by_side, got `{other}`"), None)),
+    })
+}
+
+/// Parse a pipeline given either as a bare array of ops or a `{version, steps}` object.
+fn parse_pipeline(s: &str) -> Result<Pipeline, McpError> {
+    let t = s.trim();
+    if t.starts_with('[') {
+        let steps: Vec<OpSpec> = serde_json::from_str(t)
+            .map_err(|e| McpError::invalid_params(format!("bad pipeline steps: {e}"), None))?;
+        Ok(Pipeline { version: Pipeline::CURRENT_VERSION, steps })
+    } else {
+        serde_json::from_str(t).map_err(|e| McpError::invalid_params(format!("bad pipeline JSON: {e}"), None))
+    }
 }
 
 /// Parse `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, or a common color name.
@@ -532,7 +880,9 @@ fn to_mcp(e: SessionError) -> McpError {
         SessionError::NotFound(_)
         | SessionError::Pipeline(_)
         | SessionError::UnknownFormat(_)
-        | SessionError::EmptyCollage => McpError::invalid_params(e.to_string(), None),
+        | SessionError::EmptyCollage
+        | SessionError::NothingToTrim
+        | SessionError::SizeMismatch => McpError::invalid_params(e.to_string(), None),
         // environment / decode failures → internal_error
         SessionError::Read { .. }
         | SessionError::Write { .. }
@@ -560,5 +910,42 @@ mod tests {
         assert!(parse_color_opt(None).unwrap().is_none());
         assert!(parse_color_opt(Some("blue")).unwrap().is_some());
         assert!(parse_color_opt(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn parses_flip_axis() {
+        assert_eq!(parse_axis("horizontal").unwrap(), FlipAxis::Horizontal);
+        assert_eq!(parse_axis(" Vertical ").unwrap(), FlipAxis::Vertical);
+        assert_eq!(parse_axis("x").unwrap(), FlipAxis::Horizontal);
+        assert_eq!(parse_axis("y").unwrap(), FlipAxis::Vertical);
+        assert!(parse_axis("diagonal").is_err());
+    }
+
+    #[test]
+    fn parses_redact_mode() {
+        assert_eq!(parse_redact_mode(None, None, None, None).unwrap(), RedactMode::Pixelate { block: 12 });
+        assert_eq!(parse_redact_mode(Some("pixelate"), Some(20), None, None).unwrap(), RedactMode::Pixelate { block: 20 });
+        assert_eq!(parse_redact_mode(Some("blur"), None, Some(8.0), None).unwrap(), RedactMode::Blur { radius: 8.0 });
+        assert_eq!(parse_redact_mode(Some("fill"), None, None, Some("red")).unwrap(), RedactMode::Fill { color: Rgba8::rgb(255, 0, 0) });
+        assert_eq!(parse_redact_mode(Some("fill"), None, None, None).unwrap(), RedactMode::Fill { color: Rgba8::rgb(0, 0, 0) });
+        assert!(parse_redact_mode(Some("scramble"), None, None, None).is_err());
+        assert!(parse_redact_mode(Some("pixelate"), Some(0), None, None).unwrap() == RedactMode::Pixelate { block: 1 }, "block clamps to >=1");
+    }
+
+    #[test]
+    fn parses_diff_view() {
+        assert_eq!(parse_diff_view(None).unwrap(), DiffView::Heatmap);
+        assert_eq!(parse_diff_view(Some("difference")).unwrap(), DiffView::Difference);
+        assert_eq!(parse_diff_view(Some("side_by_side")).unwrap(), DiffView::SideBySide);
+        assert!(parse_diff_view(Some("onion")).is_err());
+    }
+
+    #[test]
+    fn parses_pipeline_array_and_object() {
+        let a = parse_pipeline(r#"[{"op":"grayscale"},{"op":"blur","radius":2}]"#).unwrap();
+        assert_eq!(a.steps.len(), 2);
+        let o = parse_pipeline(r#"{"version":0,"steps":[{"op":"invert"}]}"#).unwrap();
+        assert_eq!(o.steps, vec![OpSpec::Invert]);
+        assert!(parse_pipeline("not json").is_err());
     }
 }

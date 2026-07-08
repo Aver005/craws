@@ -17,6 +17,7 @@ pub mod color;
 pub mod compose;
 pub mod draw;
 pub mod engine;
+pub mod filter;
 pub mod fonts;
 pub mod hash;
 pub mod ops;

@@ -1,5 +1,5 @@
 # PLANS
-> Roadmap & active priorities. Last updated: 2026-07-06 (stack decision folded in; M2 redefined).
+> Roadmap & active priorities. Last updated: 2026-07-08 (M1+ broadened to 26 tools; menu-driven).
 
 ## MILESTONES
 
@@ -25,10 +25,26 @@ op that doesn't exist yet, so the shipped demo is resize/adjust/convert batch (t
 Doc-automation toolset over the engine: **annotation** (draw_rect/ellipse/line/arrow — own SDF
 rasterizer in linear light) + **composition** (overlay, smart justified-rows collage) + **text**
 (draw_text — ab_glyph glyph masks through the same coverage→composite path; embedded Cascadia default;
-font-by-name resolved in the port via fontdb so the engine stays deterministic). 14 MCP tools total.
-Annotation+compose verified visually; text by unit tests (visual demo pending). ⚠️ workspace clippy
-unverified this session (dev box out of commit memory — see STATE/JOURNAL).
-Text follow-ups: word-wrap, text background/outline, richer shaping.
+font-by-name resolved in the port via fontdb so the engine stays deterministic).
+Text follow-ups still open: word-wrap, text background/outline, richer shaping.
+
+### M1++ — Broaden further: geometry, color, filter, compare, meta `[DONE 2026-07-08]`
+Menu-driven (owner picks lettered options). Landed **12 more tools → 26 total**:
+- **geometry** (OpSpec): rotate (90° exact / bilinear+expand), flip, pad; **trim** (auto-crop uniform
+  border — session-direct because output size depends on pixels).
+- **color** (OpSpec, pointwise): hue_rotate (SVG luma-preserving matrix in linear), invert (perceptual sRGB).
+- **filter** (OpSpec, new `filter.rs`): blur (separable Gaussian), redact (pixelate/blur/fill a region),
+  spotlight (dim outside a window), beautify (rounded corners + soft shadow + padded background).
+- **compare/meta** (session-direct): diff (difference/heatmap/side_by_side + change metric), run_pipeline
+  (a whole JSON chain in one call).
+
+Home rule proven twice: single-input & size-computable → `OpSpec` (cached, CLI-usable); multi-input /
+content-dependent-size / meta → session-direct function. **109 tests; clippy `--all-targets -D warnings`
+= 0 across domain+engine+mcp+cli** (the earlier commit-memory gap is closed via `-j1` + no-debuginfo).
+⚠️ Found a latent compose index-hashing bug (`BUGS.md`); a visual eyeball of the new ops is still owed.
+Remaining menu letters (owner's call): E brightness/contrast, F saturation/vibrance, H levels, I curves,
+J white_balance, L gradient_map, N sharpen, O pixelate(standalone), P vignette, V bg-removal(AI),
+W watermark, X device_frame.
 
 ### M2 — Viewport bridge spike `[DONE 2026-07-06]` ✅ decision de-risked
 Built `crates/craws-app` (Tauri 2) + `app/` (React/WebGPU): window, 24MP sample, exposure slider,

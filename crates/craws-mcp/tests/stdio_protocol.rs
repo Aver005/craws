@@ -127,6 +127,8 @@ fn handshake_lists_tools_and_runs_a_batch() {
     for expected in [
         "open_image", "resize", "crop", "exposure", "grayscale", "image_info", "export",
         "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "draw_text", "overlay", "collage",
+        "rotate", "flip", "pad", "trim",
+        "hue_rotate", "invert", "blur", "redact", "spotlight", "beautify", "diff", "run_pipeline",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}; got {names:?}");
     }
@@ -202,6 +204,83 @@ fn annotation_and_collage_over_the_wire() {
     // a bad color is a clean tool error, not a crash
     let msg = c.call_expect_error("draw_line", json!({ "image_id": id, "x1": 0, "y1": 0, "x2": 10, "y2": 10, "color": "chartreuse" }));
     assert!(msg.to_lowercase().contains("color"), "color error: {msg}");
+}
+
+#[test]
+fn geometry_ops_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Client::spawn();
+    c.request("initialize", json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "t", "version": "0" } }));
+    c.notify("notifications/initialized");
+
+    let src = dir.path().join("g.png");
+    sample_png(&src, 400, 300);
+    let id = c.call_ok("open_image", json!({ "path": src.to_str().unwrap() }))["image_id"].as_str().unwrap().to_string();
+
+    // rotate 90° cw → 300×400
+    let r = c.call_ok("rotate", json!({ "image_id": id, "degrees": 90 }));
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(300), Some(400)), "90° swaps dims");
+    let rid = r["image_id"].as_str().unwrap().to_string();
+
+    // flip vertical keeps size
+    let f = c.call_ok("flip", json!({ "image_id": rid, "axis": "vertical" }));
+    assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(300), Some(400)));
+    let fid = f["image_id"].as_str().unwrap().to_string();
+
+    // pad a 10px transparent margin all round → 320×420
+    let p = c.call_ok("pad", json!({ "image_id": fid, "all": 10, "color": "#00000000" }));
+    assert_eq!((p["width"].as_u64(), p["height"].as_u64()), (Some(320), Some(420)));
+    let pid = p["image_id"].as_str().unwrap().to_string();
+
+    // trim removes exactly that transparent margin → back to 300×400 (round-trip)
+    let t = c.call_ok("trim", json!({ "image_id": pid }));
+    assert_eq!((t["width"].as_u64(), t["height"].as_u64()), (Some(300), Some(400)), "trim reverses the pad");
+
+    // a bad axis is a clean tool error, not a crash
+    let msg = c.call_expect_error("flip", json!({ "image_id": id, "axis": "sideways" }));
+    assert!(msg.to_lowercase().contains("axis"), "axis error: {msg}");
+}
+
+#[test]
+fn color_filter_and_meta_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Client::spawn();
+    c.request("initialize", json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "t", "version": "0" } }));
+    c.notify("notifications/initialized");
+
+    let src = dir.path().join("s.png");
+    sample_png(&src, 200, 150);
+    let id = c.call_ok("open_image", json!({ "path": src.to_str().unwrap() }))["image_id"].as_str().unwrap().to_string();
+
+    // run_pipeline: hue_rotate + invert + blur in one call (all size-preserving)
+    let pipeline = json!([
+        { "op": "hue_rotate", "degrees": 90 },
+        { "op": "invert" },
+        { "op": "blur", "radius": 2 }
+    ])
+    .to_string();
+    let out = c.call_ok("run_pipeline", json!({ "image_id": id, "pipeline": pipeline }));
+    assert_eq!((out["width"].as_u64(), out["height"].as_u64()), (Some(200), Some(150)));
+    let pid = out["image_id"].as_str().unwrap().to_string();
+
+    // redact + spotlight keep size
+    let r = c.call_ok("redact", json!({ "image_id": id, "x": 10, "y": 10, "width": 40, "height": 20, "mode": "pixelate", "block": 8 }));
+    assert_eq!(r["width"], 200);
+    let sp = c.call_ok("spotlight", json!({ "image_id": id, "x": 50, "y": 40, "width": 80, "height": 60, "dim": 0.6 }));
+    assert_eq!(sp["height"], 150);
+
+    // beautify grows the canvas by 2·padding
+    let b = c.call_ok("beautify", json!({ "image_id": id, "padding": 20 }));
+    assert_eq!((b["width"].as_u64(), b["height"].as_u64()), (Some(240), Some(190)));
+
+    // diff returns a visualization handle plus a change metric
+    let d = c.call_ok("diff", json!({ "a_id": id, "b_id": pid, "view": "difference" }));
+    assert_eq!(d["width"], 200);
+    assert!(d["fraction_changed"].as_f64().unwrap() > 0.0, "hue+invert+blur changed pixels: {d}");
+
+    // a bad redact mode is a clean tool error
+    let msg = c.call_expect_error("redact", json!({ "image_id": id, "x": 0, "y": 0, "width": 10, "height": 10, "mode": "scramble" }));
+    assert!(msg.to_lowercase().contains("mode") || msg.to_lowercase().contains("pixelate"), "redact mode error: {msg}");
 }
 
 #[test]

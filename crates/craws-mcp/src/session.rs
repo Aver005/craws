@@ -7,9 +7,9 @@
 //! One shared [`Engine`] means its content-hash cache spans the whole session —
 //! batch-processing many similar images stays BLAZING.
 
-use craws_domain::{OpSpec, Pipeline, Size};
-use craws_engine::compose::{self, CollageOptions};
-use craws_engine::{hash, Engine, TiledImage};
+use craws_domain::{OpSpec, Pipeline, Rgba8, Size};
+use craws_engine::compose::{self, CollageOptions, DiffView};
+use craws_engine::{hash, ops, Engine, TiledImage};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +39,19 @@ pub enum SessionError {
     UnknownFormat(String),
     #[error("collage needs at least one image")]
     EmptyCollage,
+    #[error("nothing to trim — the image is a single uniform color")]
+    NothingToTrim,
+    #[error("this diff view needs both images to be the same size")]
+    SizeMismatch,
+}
+
+/// A `diff` result: the visualization handle plus the change metric (absent when
+/// the two images differ in size).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffResult {
+    pub image: ImageRef,
+    pub fraction: Option<f32>,
+    pub max: Option<f32>,
 }
 
 pub struct Session {
@@ -140,6 +153,41 @@ impl Session {
         let imgs = ids.iter().map(|id| self.get(id)).collect::<Result<Vec<_>, _>>()?;
         let refs: Vec<&TiledImage> = imgs.iter().collect();
         Ok(self.insert(compose::collage(&refs, opts)))
+    }
+
+    /// Auto-crop a uniform border → new handle. `color` overrides the detected
+    /// background (default: the top-left pixel); `tolerance` (linear, 0 = exact)
+    /// absorbs anti-aliasing / compression noise. Errors when the whole image is
+    /// background (there would be nothing left).
+    pub fn trim(&self, id: &str, color: Option<Rgba8>, tolerance: f32) -> Result<ImageRef, SessionError> {
+        let img = self.get(id)?;
+        match ops::trim(&img, color, tolerance) {
+            Some(out) => Ok(self.insert(out)),
+            None => Err(SessionError::NothingToTrim),
+        }
+    }
+
+    /// Compare two images → a visualization handle + change metric. `Difference`
+    /// and `Heatmap` require matching sizes; `SideBySide` accepts any.
+    pub fn diff(&self, a_id: &str, b_id: &str, view: DiffView, threshold: f32) -> Result<DiffResult, SessionError> {
+        let a = self.get(a_id)?;
+        let b = self.get(b_id)?;
+        if matches!(view, DiffView::Difference | DiffView::Heatmap) && a.size() != b.size() {
+            return Err(SessionError::SizeMismatch);
+        }
+        let (img, stats) = compose::diff(&a, &b, view, threshold);
+        let image = self.insert(img);
+        Ok(DiffResult { image, fraction: stats.fraction, max: stats.max })
+    }
+
+    /// Run a whole pipeline (chain of ops) on `id` in one shot → final handle.
+    /// The engine's shared cache means re-running a tweaked chain stays cheap.
+    pub fn run_pipeline(&self, id: &str, pipeline: &Pipeline) -> Result<ImageRef, SessionError> {
+        let src = self.get(id)?;
+        let (out, _stats) = self.engine.run(&src, pipeline).map_err(|e| match e {
+            craws_engine::EngineError::Pipeline(p) => SessionError::Pipeline(p),
+        })?;
+        Ok(self.insert(out))
     }
 
     /// Dimensions of a handle without mutating anything.
@@ -275,6 +323,60 @@ mod tests {
         let r = s.apply(&img.id, OpSpec::DrawArrow { x1: 10.0, y1: 10.0, x2: 150.0, y2: 120.0, color: Rgba8::rgb(255, 0, 0), thickness: 4.0, head_length: 18.0 }).unwrap();
         assert_eq!((r.width, r.height), (200, 200), "annotation keeps size");
         assert_ne!(r.id, img.id);
+    }
+
+    fn bordered_png(w: u32, h: u32, border: u32) -> Vec<u8> {
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let inside = x >= border && x < w - border && y >= border && y < h - border;
+                px.extend_from_slice(if inside { &[10, 20, 200, 255] } else { &[255, 255, 255, 255] });
+            }
+        }
+        craws_codecs::encode(w, h, &px, ImageFormat::Png, None).unwrap()
+    }
+
+    #[test]
+    fn trim_via_session_crops_border_and_rejects_uniform() {
+        let s = Session::new();
+        // 60×40 white with an 8px border around a colored core → trims to 44×24
+        let img = s.open_bytes(&bordered_png(60, 40, 8)).unwrap();
+        let out = s.trim(&img.id, None, 0.0).unwrap();
+        assert_eq!((out.width, out.height), (44, 24), "border trimmed away");
+        assert_ne!(out.id, img.id, "trim mints a new handle");
+
+        // a single-color image has nothing to keep
+        let solid = s
+            .open_bytes(&craws_codecs::encode(20, 20, &vec![255u8; 20 * 20 * 4], ImageFormat::Png, None).unwrap())
+            .unwrap();
+        assert!(matches!(s.trim(&solid.id, None, 0.0), Err(SessionError::NothingToTrim)));
+    }
+
+    #[test]
+    fn diff_and_run_pipeline_via_session() {
+        let s = Session::new();
+        let a = s.open_bytes(&sample_png(64, 64)).unwrap();
+
+        // run_pipeline: chain grayscale + blur in one call
+        let chained = s
+            .run_pipeline(&a.id, &Pipeline { version: 0, steps: vec![OpSpec::Grayscale, OpSpec::Blur { radius: 1.5 }] })
+            .unwrap();
+        assert_eq!((chained.width, chained.height), (64, 64));
+        assert_ne!(chained.id, a.id);
+
+        // diff an image with itself → no change
+        let d = s.diff(&a.id, &a.id, DiffView::Difference, 0.0).unwrap();
+        assert_eq!(d.fraction, Some(0.0));
+
+        // diff vs its grayscale → some change
+        let gray = s.apply(&a.id, OpSpec::Grayscale).unwrap();
+        let d = s.diff(&a.id, &gray.id, DiffView::Heatmap, 0.0).unwrap();
+        assert!(d.fraction.unwrap() > 0.0);
+
+        // side-by-side allows different sizes; difference rejects them
+        let small = s.apply(&a.id, OpSpec::Crop { x: 0, y: 0, width: 32, height: 32 }).unwrap();
+        assert!(s.diff(&a.id, &small.id, DiffView::SideBySide, 0.0).is_ok());
+        assert!(matches!(s.diff(&a.id, &small.id, DiffView::Difference, 0.0), Err(SessionError::SizeMismatch)));
     }
 
     #[test]

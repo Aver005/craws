@@ -8,9 +8,11 @@ hex (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) or a name
 
 ## Contents
 - [Session & I/O](#session--io): open_image, image_info, export
-- [Transforms](#transforms): resize, crop, exposure, grayscale
+- [Transforms](#transforms): resize, crop, rotate, flip, pad, trim, exposure, grayscale, hue_rotate, invert
+- [Filters](#filters): blur, redact, spotlight, beautify
 - [Annotation](#annotation): draw_rect, draw_ellipse, draw_line, draw_arrow, draw_text
-- [Composition](#composition): overlay, collage
+- [Composition & compare](#composition--compare): overlay, collage, diff
+- [Meta](#meta): run_pipeline
 
 ---
 
@@ -79,6 +81,51 @@ Keep a rectangular region. The rect **must lie fully inside** the image.
 
 Out-of-bounds → error (names the rect and the image size).
 
+### `rotate`
+Rotate clockwise about the center. Multiples of 90° are **lossless** (exact pixel
+permutation); other angles resample (bilinear) with transparent corners.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `degrees` | float | yes | | clockwise; e.g. 90, -90, 45 |
+| `expand` | bool | no | true | grow the canvas to fit the rotated image; `false` keeps the original size and clips the corners |
+
+Size: 90°/270° swap width/height; arbitrary angles with `expand` grow to the rotated
+bounding box.
+
+### `flip`
+Mirror across an axis. Size unchanged.
+
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `axis` | string | yes | `horizontal` (left↔right) or `vertical` (top↔bottom) |
+
+### `pad`
+Extend the canvas with a colored margin. Output grows by the margins.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `all` | int | no | 0 | applied to any side left unset — uniform padding |
+| `left`, `right`, `top`, `bottom` | int | no | `all` | per-side override |
+| `color` | color | no | transparent | border fill (use png/webp to keep transparency) |
+
+The inverse of `trim`. Output size = `W + left + right` × `H + top + bottom`.
+
+### `trim`
+Auto-crop a uniform border (whitespace, a solid background, or transparency).
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `color` | color | no | top-left pixel | background to remove; omit to auto-detect from the corner |
+| `tolerance` | float | no | 0.01 | 0..1 match slack — raise for JPEG / anti-aliased edges |
+
+Returns the cropped handle. A single-color image (nothing to keep) → error; an image
+with no trimmable border comes back unchanged.
+
 ### `exposure`
 Photographic exposure in **stops**: linear multiply by `2^stops`.
 
@@ -93,6 +140,83 @@ Rec.709 luminance grayscale (computed in linear light).
 | param | type | required |
 |---|---|---|
 | `image_id` | string | yes |
+
+### `hue_rotate`
+Rotate the hue of every pixel about the luma axis (luminance preserved).
+
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `degrees` | float | yes | 0..360; 0/360 = identity |
+
+### `invert`
+Photographic negative, computed in perceptual sRGB space (mid-gray → mid-gray).
+Alpha is preserved.
+
+| param | type | required |
+|---|---|---|
+| `image_id` | string | yes |
+
+---
+
+## Filters
+
+Single-image, size-preserving (except `beautify`). Composited in linear light.
+
+### `blur`
+Whole-image Gaussian blur.
+
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `radius` | float | yes | blur strength ≈ Gaussian sigma in px (0 = no-op) |
+
+For a *region only*, use `redact` with `mode:"blur"`.
+
+### `redact`
+Obscure a rectangular region — the secret-hiding tool. Size unchanged.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `x`, `y`, `width`, `height` | float | yes | | region to censor |
+| `mode` | string | no | `pixelate` | `pixelate` \| `blur` \| `fill` |
+| `block` | int | no | 12 | **pixelate**: mosaic cell size |
+| `radius` | float | no | 12 | **blur**: Gaussian sigma |
+| `color` | color | no | black | **fill**: bar color |
+
+`pixelate` and `fill` destroy the value (safe redaction); `blur` only softens it —
+don't blur real secrets. Only tiles overlapping the region are recomputed.
+
+### `spotlight`
+Dim everything *outside* the (optionally rounded, feathered) window to draw the eye
+to it. Size unchanged.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `x`, `y`, `width`, `height` | float | yes | | the window kept bright |
+| `dim` | float | no | 0.55 | veil opacity outside, 0..1 (1 = fully dark) |
+| `corner_radius` | float | no | 0 | round the window |
+| `color` | color | no | black | veil color |
+| `feather` | float | no | 0 | soft edge width in px |
+
+### `beautify`
+Polish a screenshot: round corners + soft drop shadow + padded background, in one
+call. **Output grows by `2·padding` per dimension.**
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `padding` | int | no | 64 | background margin around the image |
+| `corner_radius` | float | no | 16 | image corner rounding |
+| `shadow_radius` | float | no | 24 | drop-shadow softness (blur sigma) |
+| `shadow_opacity` | float | no | 0.35 | 0..1 (0 = no shadow) |
+| `shadow_offset` | float | no | 12 | shadow vertical offset in px |
+| `background` | color | no | transparent | frame color (use png/webp for transparent) |
+
+Do it **last**, after annotation. Default transparent background = a rounded image
+with a soft shadow on transparency (drops onto any doc backdrop).
 
 ---
 
@@ -177,10 +301,10 @@ Unknown font names fall back to the built-in font; a bad `align_*` value errors.
 
 ---
 
-## Composition
+## Composition & compare
 
 These take **multiple** handles. They are not part of the single-image chain — they
-combine images you've already opened/edited.
+combine or compare images you've already opened/edited.
 
 ### `overlay`
 Composite `top` onto `base` at an offset. Result keeps the **base's** size.
@@ -210,3 +334,38 @@ the width; aspect ratios preserved).
 
 Returns a new handle sized `target_width × (computed height)`. More images per row
 → shorter rows; a larger `row_height` → bigger cells and a taller canvas.
+
+### `diff`
+Compare two images: a visualization **plus a change metric**.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `a_id` | string | yes | | baseline |
+| `b_id` | string | yes | | image compared against the baseline |
+| `view` | string | no | `heatmap` | `heatmap` \| `difference` \| `side_by_side` |
+| `threshold` | float | no | 0 | per-channel change threshold 0..1 for the metric |
+
+Returns `{image_id, width, height, fraction_changed, max_difference}` — the last two
+are 0..1 (or `null` when the sizes differ). `difference`/`heatmap` **require both
+images the same size**; `side_by_side` accepts any (canvas = `aw + gap + bw` wide).
+`heatmap` glows changed pixels red over a dimmed base; `difference` is the raw
+per-channel delta. Use `fraction_changed` for visual-regression asserts.
+
+---
+
+## Meta
+
+### `run_pipeline`
+Apply a whole chain of single-image ops in one call.
+
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `pipeline` | string | yes | JSON: a bare array of op objects, or `{"version":0,"steps":[...]}` |
+
+Ops use the pipeline format — the same `{"op":...}` objects the CLI's `craws run`
+consumes (every OpSpec above: resize/crop/rotate/flip/pad/trim/exposure/grayscale/
+hue_rotate/invert/blur/redact/spotlight/beautify/draw_*). Returns the final handle.
+Example `pipeline`:
+`[{"op":"trim"},{"op":"resize","width":1200},{"op":"beautify","padding":48}]`.
+(`overlay`/`collage`/`diff` are multi-image, so they're not valid pipeline steps.)

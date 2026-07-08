@@ -41,6 +41,37 @@ pub enum AlignY {
     Baseline,
 }
 
+/// Mirror axis for [`OpSpec::Flip`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlipAxis {
+    /// Mirror left↔right (columns reversed).
+    Horizontal,
+    /// Mirror top↔bottom (rows reversed).
+    Vertical,
+}
+
+/// How [`OpSpec::Redact`] obscures its region.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RedactMode {
+    /// Mosaic: average `block`×`block` cells (the reversible-proof censor look).
+    Pixelate {
+        #[serde(default = "default_redact_block")]
+        block: u32,
+    },
+    /// Gaussian-blur the region by `radius`.
+    Blur { radius: f32 },
+    /// Paint a solid `color` over the region (a black bar, by default).
+    Fill { color: Rgba8 },
+}
+
+impl Default for RedactMode {
+    fn default() -> Self {
+        RedactMode::Pixelate { block: default_redact_block() }
+    }
+}
+
 /// One step of a pipeline. Serialized with an `op` tag:
 /// `{ "op": "resize", "width": 1600 }`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,6 +166,88 @@ pub enum OpSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         line_height: Option<f32>,
     },
+
+    // ── geometry ops (single-input; change the output size) ──
+    /// Rotate about the image center by `degrees` (positive = clockwise).
+    /// Multiples of 90° are exact pixel permutations; other angles resample
+    /// (bilinear, in premultiplied linear light) with transparent corners.
+    /// `expand` grows the canvas to contain the rotated image (default);
+    /// `false` keeps the original size and clips the corners.
+    Rotate {
+        degrees: f32,
+        #[serde(default = "default_true")]
+        expand: bool,
+    },
+    /// Mirror across an axis. Size unchanged.
+    Flip { axis: FlipAxis },
+    /// Extend the canvas by a margin on each side, filling the new border with
+    /// `color` (default transparent). Source pixels are placed at `(left, top)`.
+    Pad {
+        #[serde(default)]
+        left: u32,
+        #[serde(default)]
+        right: u32,
+        #[serde(default)]
+        top: u32,
+        #[serde(default)]
+        bottom: u32,
+        #[serde(default = "transparent")]
+        color: Rgba8,
+    },
+
+    // ── color ops (single-input, pointwise; size unchanged) ──
+    /// Rotate hue by `degrees` about the luma axis (luminance-preserving),
+    /// evaluated in linear light. 0 / 360 = identity.
+    HueRotate { degrees: f32 },
+    /// Photographic negative — invert RGB in perceptual (sRGB) space. Alpha kept.
+    Invert,
+
+    // ── filter ops (single-input; size unchanged unless noted) ──
+    /// Separable Gaussian blur; `radius` ≈ the Gaussian sigma in pixels (0 = no-op).
+    /// Runs in premultiplied linear light, so edges don't fringe.
+    Blur { radius: f32 },
+    /// Obscure a rectangular region — pixelate, blur, or solid-fill it. The
+    /// signature "censor a secret in a screenshot" tool.
+    Redact {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        mode: RedactMode,
+    },
+    /// Draw the eye to a region by dimming everything outside it. `dim` is the
+    /// veil opacity (0..1) of `color`; the window can be rounded and feathered.
+    Spotlight {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        corner_radius: f32,
+        #[serde(default = "default_dim")]
+        dim: f32,
+        #[serde(default = "black")]
+        color: Rgba8,
+        #[serde(default)]
+        feather: f32,
+    },
+    /// "Polish" a screenshot: round its corners, drop a soft shadow, and frame it
+    /// with `padding` of `background`. Output grows by `2·padding` per dimension.
+    Beautify {
+        #[serde(default = "default_beautify_padding")]
+        padding: u32,
+        #[serde(default = "default_corner_radius")]
+        corner_radius: f32,
+        #[serde(default = "default_shadow_radius")]
+        shadow_radius: f32,
+        #[serde(default = "default_shadow_opacity")]
+        shadow_opacity: f32,
+        #[serde(default = "default_shadow_offset")]
+        shadow_offset: f32,
+        #[serde(default = "transparent")]
+        background: Rgba8,
+    },
 }
 
 fn default_stroke_width() -> f32 {
@@ -148,6 +261,36 @@ fn default_head_length() -> f32 {
 }
 fn default_font_size() -> f32 {
     24.0
+}
+fn default_true() -> bool {
+    true
+}
+fn transparent() -> Rgba8 {
+    Rgba8::new(0, 0, 0, 0)
+}
+fn black() -> Rgba8 {
+    Rgba8::new(0, 0, 0, 255)
+}
+fn default_redact_block() -> u32 {
+    12
+}
+fn default_dim() -> f32 {
+    0.55
+}
+fn default_beautify_padding() -> u32 {
+    64
+}
+fn default_corner_radius() -> f32 {
+    16.0
+}
+fn default_shadow_radius() -> f32 {
+    24.0
+}
+fn default_shadow_opacity() -> f32 {
+    0.35
+}
+fn default_shadow_offset() -> f32 {
+    12.0
 }
 
 impl OpSpec {
@@ -163,6 +306,15 @@ impl OpSpec {
             OpSpec::DrawLine { .. } => "draw_line",
             OpSpec::DrawArrow { .. } => "draw_arrow",
             OpSpec::DrawText { .. } => "draw_text",
+            OpSpec::Rotate { .. } => "rotate",
+            OpSpec::Flip { .. } => "flip",
+            OpSpec::Pad { .. } => "pad",
+            OpSpec::HueRotate { .. } => "hue_rotate",
+            OpSpec::Invert => "invert",
+            OpSpec::Blur { .. } => "blur",
+            OpSpec::Redact { .. } => "redact",
+            OpSpec::Spotlight { .. } => "spotlight",
+            OpSpec::Beautify { .. } => "beautify",
         }
     }
 
@@ -203,6 +355,74 @@ impl OpSpec {
                 Ok(input)
             }
             OpSpec::Grayscale => Ok(input),
+
+            OpSpec::Rotate { degrees, expand } => {
+                if !degrees.is_finite() {
+                    return Err(PipelineError::NonFiniteParam { op: "rotate", param: "degrees" });
+                }
+                Ok(rotated_size(input, degrees, expand))
+            }
+            OpSpec::Flip { .. } => Ok(input),
+            OpSpec::Pad { left, right, top, bottom, .. } => {
+                let w = input.width as u64 + left as u64 + right as u64;
+                let h = input.height as u64 + top as u64 + bottom as u64;
+                if w > u32::MAX as u64 || h > u32::MAX as u64 {
+                    return Err(PipelineError::ResultTooLarge { op: "pad" });
+                }
+                Ok(Size::new(w as u32, h as u32))
+            }
+
+            OpSpec::HueRotate { degrees } => {
+                if !degrees.is_finite() {
+                    return Err(PipelineError::NonFiniteParam { op: "hue_rotate", param: "degrees" });
+                }
+                Ok(input)
+            }
+            OpSpec::Invert => Ok(input),
+            OpSpec::Blur { radius } => {
+                if !radius.is_finite() {
+                    return Err(PipelineError::NonFiniteParam { op: "blur", param: "radius" });
+                }
+                if radius < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "blur" });
+                }
+                Ok(input)
+            }
+            OpSpec::Redact { x, y, width, height, mode } => {
+                check_finite("redact", &[x, y, width, height])?;
+                if width < 0.0 || height < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "redact" });
+                }
+                match mode {
+                    RedactMode::Pixelate { block: 0 } => {
+                        return Err(PipelineError::NegativeParam { op: "redact" });
+                    }
+                    RedactMode::Blur { radius } if !radius.is_finite() || radius < 0.0 => {
+                        return Err(PipelineError::NegativeParam { op: "redact" });
+                    }
+                    _ => {}
+                }
+                Ok(input)
+            }
+            OpSpec::Spotlight { x, y, width, height, corner_radius, dim, feather, .. } => {
+                check_finite("spotlight", &[x, y, width, height, corner_radius, dim, feather])?;
+                if width < 0.0 || height < 0.0 || corner_radius < 0.0 || feather < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "spotlight" });
+                }
+                Ok(input)
+            }
+            OpSpec::Beautify { padding, corner_radius, shadow_radius, shadow_opacity, shadow_offset, .. } => {
+                check_finite("beautify", &[corner_radius, shadow_radius, shadow_opacity, shadow_offset])?;
+                if corner_radius < 0.0 || shadow_radius < 0.0 || shadow_opacity < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "beautify" });
+                }
+                let w = input.width as u64 + 2 * padding as u64;
+                let h = input.height as u64 + 2 * padding as u64;
+                if w > u32::MAX as u64 || h > u32::MAX as u64 {
+                    return Err(PipelineError::ResultTooLarge { op: "beautify" });
+                }
+                Ok(Size::new(w as u32, h as u32))
+            }
 
             OpSpec::DrawRect { x, y, width, height, corner_radius, fill, stroke, stroke_width } => {
                 check_finite("draw_rect", &[x, y, width, height, corner_radius, stroke_width])?;
@@ -267,6 +487,27 @@ fn keep_aspect(known: u32, num: u32, den: u32) -> u32 {
     (v.max(1)).min(u32::MAX as u64) as u32
 }
 
+/// Output size of a rotation. Multiples of 90° swap or keep dimensions exactly;
+/// other angles either grow to the rotated bounding box (`expand`) or keep the
+/// input size. Kept in sync with `craws_engine::ops::rotate`.
+fn rotated_size(input: Size, degrees: f32, expand: bool) -> Size {
+    let norm = degrees.rem_euclid(360.0);
+    let q = (norm / 90.0).round();
+    let is_ortho = (norm - q * 90.0).abs() < 1e-3;
+    if is_ortho {
+        let k = (q as i64).rem_euclid(4);
+        return if k == 1 || k == 3 { Size::new(input.height, input.width) } else { input };
+    }
+    if !expand {
+        return input;
+    }
+    let r = norm.to_radians();
+    let (s, c) = (r.sin().abs(), r.cos().abs());
+    let w = (input.width as f32 * c + input.height as f32 * s).ceil().max(1.0);
+    let h = (input.width as f32 * s + input.height as f32 * c).ceil().max(1.0);
+    Size::new(w as u32, h as u32)
+}
+
 /// An ordered, linear chain of operations. (The domain model is designed to grow
 /// into a DAG later; v0 executes strictly top-to-bottom.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,6 +549,8 @@ pub enum PipelineError {
     ResizeMissingDims,
     #[error("{op}: result would have a zero dimension")]
     ZeroSize { op: &'static str },
+    #[error("{op}: result dimensions exceed the u32 pixel limit")]
+    ResultTooLarge { op: &'static str },
     #[error("crop {rect:?} does not fit inside image {image:?}")]
     CropOutOfBounds { rect: Rect, image: Size },
     #[error("{op}: parameter `{param}` must be finite")]
@@ -466,5 +709,95 @@ mod tests {
             ],
         };
         assert_eq!(p.validate(px(4000, 3000)).unwrap(), vec![px(800, 600), px(640, 480), px(640, 480)]);
+    }
+
+    #[test]
+    fn rotate_output_size() {
+        let img = px(800, 600);
+        // orthogonal: 90/270 swap, 0/180 keep — expand is irrelevant here
+        for (deg, want) in [(0.0, px(800, 600)), (90.0, px(600, 800)), (180.0, px(800, 600)), (270.0, px(600, 800)), (-90.0, px(600, 800))] {
+            let op = OpSpec::Rotate { degrees: deg, expand: true };
+            assert_eq!(op.output_size(img).unwrap(), want, "{deg}°");
+        }
+        // 45° expand grows to the rotated bbox: (800+600)/√2 ≈ 989.9 → 990 both sides
+        let op = OpSpec::Rotate { degrees: 45.0, expand: true };
+        assert_eq!(op.output_size(img).unwrap(), px(990, 990));
+        // 45° no-expand keeps the canvas
+        let op = OpSpec::Rotate { degrees: 45.0, expand: false };
+        assert_eq!(op.output_size(img).unwrap(), img);
+        // non-finite angle is rejected
+        let nan = OpSpec::Rotate { degrees: f32::NAN, expand: true };
+        assert!(matches!(nan.output_size(img), Err(PipelineError::NonFiniteParam { .. })));
+    }
+
+    #[test]
+    fn flip_keeps_size_and_pad_grows() {
+        let img = px(100, 80);
+        assert_eq!(OpSpec::Flip { axis: FlipAxis::Horizontal }.output_size(img).unwrap(), img);
+        assert_eq!(OpSpec::Flip { axis: FlipAxis::Vertical }.output_size(img).unwrap(), img);
+
+        let pad = OpSpec::Pad { left: 10, right: 20, top: 5, bottom: 15, color: transparent() };
+        assert_eq!(pad.output_size(img).unwrap(), px(130, 100));
+
+        // absurd padding overflows u32 and is rejected, not silently wrapped
+        let huge = OpSpec::Pad { left: u32::MAX, right: 0, top: 0, bottom: 0, color: transparent() };
+        assert!(matches!(huge.output_size(img), Err(PipelineError::ResultTooLarge { .. })));
+    }
+
+    #[test]
+    fn geometry_json_shapes_and_defaults() {
+        // rotate: expand defaults to true
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "rotate", "degrees": 90 }"#).unwrap();
+        assert_eq!(op, OpSpec::Rotate { degrees: 90.0, expand: true });
+        assert_eq!(op.name(), "rotate");
+        // flip axis is snake_case
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "flip", "axis": "horizontal" }"#).unwrap();
+        assert_eq!(op, OpSpec::Flip { axis: FlipAxis::Horizontal });
+        // pad: omitted sides default to 0, color to transparent
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "pad", "left": 8, "top": 8 }"#).unwrap();
+        assert_eq!(op, OpSpec::Pad { left: 8, right: 0, top: 8, bottom: 0, color: Rgba8::new(0, 0, 0, 0) });
+        // full round-trip through the tagged form
+        let back: OpSpec = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+        assert_eq!(op, back);
+    }
+
+    #[test]
+    fn color_and_filter_ops_keep_size() {
+        let img = px(200, 150);
+        for op in [
+            OpSpec::HueRotate { degrees: 90.0 },
+            OpSpec::Invert,
+            OpSpec::Blur { radius: 4.0 },
+            OpSpec::Redact { x: 10.0, y: 10.0, width: 50.0, height: 30.0, mode: RedactMode::default() },
+            OpSpec::Spotlight { x: 20.0, y: 20.0, width: 80.0, height: 60.0, corner_radius: 8.0, dim: 0.6, color: black(), feather: 4.0 },
+        ] {
+            assert_eq!(op.output_size(img).unwrap(), img, "{} keeps size", op.name());
+        }
+        // beautify grows by 2·padding
+        let b = OpSpec::Beautify { padding: 40, corner_radius: 16.0, shadow_radius: 24.0, shadow_opacity: 0.35, shadow_offset: 12.0, background: transparent() };
+        assert_eq!(b.output_size(img).unwrap(), px(280, 230));
+    }
+
+    #[test]
+    fn color_filter_validation_and_json() {
+        // non-finite / negative params are rejected
+        assert!(matches!(OpSpec::HueRotate { degrees: f32::NAN }.output_size(px(4, 4)), Err(PipelineError::NonFiniteParam { .. })));
+        assert!(matches!(OpSpec::Blur { radius: -1.0 }.output_size(px(4, 4)), Err(PipelineError::NegativeParam { .. })));
+        let bad_block = OpSpec::Redact { x: 0.0, y: 0.0, width: 4.0, height: 4.0, mode: RedactMode::Pixelate { block: 0 } };
+        assert!(matches!(bad_block.output_size(px(4, 4)), Err(PipelineError::NegativeParam { .. })));
+
+        // invert is a bare unit tag
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "invert" }"#).unwrap();
+        assert_eq!(op, OpSpec::Invert);
+        // redact mode defaults to pixelate(block=12); nested tagged enum round-trips
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "redact", "x": 0, "y": 0, "width": 10, "height": 10 }"#).unwrap();
+        assert_eq!(op, OpSpec::Redact { x: 0.0, y: 0.0, width: 10.0, height: 10.0, mode: RedactMode::Pixelate { block: 12 } });
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "redact", "x": 0, "y": 0, "width": 10, "height": 10, "mode": { "type": "blur", "radius": 8 } }"#).unwrap();
+        assert_eq!(op, OpSpec::Redact { x: 0.0, y: 0.0, width: 10.0, height: 10.0, mode: RedactMode::Blur { radius: 8.0 } });
+        let back: OpSpec = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+        assert_eq!(op, back);
+        // beautify defaults
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "beautify" }"#).unwrap();
+        assert_eq!(op, OpSpec::Beautify { padding: 64, corner_radius: 16.0, shadow_radius: 24.0, shadow_opacity: 0.35, shadow_offset: 12.0, background: transparent() });
     }
 }

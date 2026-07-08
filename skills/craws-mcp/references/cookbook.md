@@ -9,6 +9,8 @@ threads the returned `image_id` into the next call.
 - [Numbered-step callouts](#numbered-step-callouts)
 - [Before / after plate](#before--after-plate)
 - [Redacting secrets](#redacting-secrets)
+- [Beautify a hero screenshot](#beautify-a-hero-screenshot)
+- [Visual regression with diff](#visual-regression-with-diff)
 - [Picture-in-picture zoom detail](#picture-in-picture-zoom-detail)
 - [Resizing screenshots for a doc width](#resizing-screenshots-for-a-doc-width)
 - [Batch-processing many screenshots](#batch-processing-many-screenshots)
@@ -94,13 +96,55 @@ the annotated handles to `collage`).
 
 ## Redacting secrets
 
-Cover the region with an **opaque** rectangle. A translucent fill is not redaction —
-the value shows through. There is no blur op yet; a solid bar is the safe choice.
+Use `redact` — it's purpose-built. **`pixelate`** (default) or **`fill`** truly destroy
+the value; `blur` only softens it, so never blur a real secret.
 
 ```
-draw_rect {image_id:img, x:secretX, y:secretY, width:secretW, height:secretH,
-           fill:"#111111"}   → redacted
+# mosaic-censor an API key (the value is gone, and can't be de-blurred)
+redact {image_id:img, x:secretX, y:secretY, width:secretW, height:secretH,
+        mode:"pixelate", block:14}                                → redacted
+# or a clean black bar
+redact {image_id:img, x:secretX, y:secretY, width:secretW, height:secretH,
+        mode:"fill", color:"#111111"}                             → redacted
 ```
+
+Get the region from Playwright (`boundingBox()` of the secret field), same as any
+annotation. Redact **before** exporting to a lossy format.
+
+## Beautify a hero screenshot
+
+Turn a raw capture into a designed-looking figure — rounded corners, a soft drop
+shadow, and breathing room — in one call. Trim any window chrome/whitespace first,
+size it, then beautify **last** (it grows the canvas by `2·padding`):
+
+```
+open_image {path:"capture.png"}                       → raw
+trim   {image_id:raw}                                 → tight     # drop uniform margins
+resize {image_id:tight, width:1200}                   → sized
+beautify {image_id:sized, padding:64, corner_radius:18,
+          shadow_radius:28, shadow_opacity:0.35,
+          background:"#0b1020"}                        → hero      # solid card…
+# …or background:"transparent" for a rounded+shadowed PNG that drops onto any backdrop
+export {image_id:hero, path:"hero.png"}
+```
+
+To point the eye at one control on a busy shot instead, `spotlight` it (dims the
+rest): `spotlight {image_id:img, x, y, width, height, dim:0.6, corner_radius:12}`.
+
+## Visual regression with diff
+
+Check whether a UI changed between two captures, and get a number to assert on:
+
+```
+open_image {path:"baseline.png"}                      → base
+open_image {path:"current.png"}                       → cur
+diff {a_id:base, b_id:cur, view:"heatmap"}            → {image_id:"img-N", fraction_changed:0.012, max_difference:0.6, ...}
+# fraction_changed ≈ 0 → no meaningful change; the heatmap handle shows WHERE it changed (glowing red)
+export {image_id:"img-N", path:"regression.png"}
+```
+
+`difference`/`heatmap` need both shots the **same size** (resize one first if not);
+`side_by_side` works for any sizes and is nice for a before/after in docs.
 
 ## Picture-in-picture zoom detail
 
@@ -141,6 +185,16 @@ for each shot in folder:
     open_image {path:shot}         → h
     resize     {image_id:h, width:1200}  → h2
     export     {image_id:h2, path: shot with .png}
+```
+
+When the normalization is several steps, collapse them into one `run_pipeline` call
+per image (same op names as the CLI pipeline):
+
+```
+for each shot in folder:
+    open_image   {path:shot}       → h
+    run_pipeline {image_id:h, pipeline:"[{\"op\":\"trim\"},{\"op\":\"resize\",\"width\":1200},{\"op\":\"beautify\",\"padding\":48}]"} → h2
+    export       {image_id:h2, path: shot with .png}
 ```
 
 For a single contact-sheet figure of the whole set, `open_image` them all and pass

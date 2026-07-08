@@ -122,7 +122,7 @@ fn render(
 // ── SDF primitives (all in pixel units; negative = inside) ──────────────────
 
 /// Rounded-box SDF (centered at c, half-extents h, corner radius r).
-fn sd_round_rect(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
+pub(crate) fn sd_round_rect(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
     let qx = (px - cx).abs() - hw + r;
     let qy = (py - cy).abs() - hh + r;
     let ax = qx.max(0.0);
@@ -157,7 +157,7 @@ fn sd_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 
 /// 1px anti-aliased coverage from a signed distance (edge at d = 0).
 #[inline]
-fn aa(d: f32) -> f32 {
+pub(crate) fn aa(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
@@ -314,6 +314,39 @@ pub fn arrow(
     render(input, bbox, &layers, tile_hash)
 }
 
+/// Dim everything *outside* the (optionally rounded, feathered) window to draw
+/// the eye to it. `dim` is the veil opacity (0..1) of `color`. Whole-image op:
+/// the veil covers every pixel outside the window, so there's no bbox shortcut.
+#[allow(clippy::too_many_arguments)]
+pub fn spotlight(
+    input: &TiledImage,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    corner_radius: f32,
+    dim: f32,
+    color: Rgba8,
+    feather: f32,
+    tile_hash: &(dyn Fn(u32) -> ContentHash + Sync),
+) -> TiledImage {
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let (hw, hh) = (w / 2.0, h / 2.0);
+    let r = corner_radius.clamp(0.0, hw.min(hh).max(0.0));
+    let dim = dim.clamp(0.0, 1.0);
+    let f = feather.max(0.0);
+    let cov = move |px: f32, py: f32| {
+        let d = sd_round_rect(px, py, cx, cy, hw, hh, r);
+        // coverage of the *inside* window (feathered), veil = the complement
+        let inside = if f <= 0.0 { aa(d) } else { (0.5 - d / f).clamp(0.0, 1.0) };
+        (1.0 - inside) * dim
+    };
+    let layers = [Layer { paint: Paint::new(color), cov: Box::new(cov) as Box<_> }];
+    let size = input.size();
+    let bbox = BBox { x0: 0, y0: 0, x1: size.width, y1: size.height };
+    render(input, bbox, &layers, tile_hash)
+}
+
 /// Composite a coverage mask (row-major `mw × mh`, values 0..1) painted in
 /// `color`, placed with its top-left at image coordinate `(ox, oy)` (which may
 /// be negative — the mask is clipped to the image). Used by text rendering:
@@ -431,6 +464,16 @@ mod tests {
         // arrowhead spreads off the shaft line near the tip (the two V segments)
         assert!(a.pixel(166, 23)[3] > 0.3, "upper head segment painted");
         assert!(a.pixel(166, 37)[3] > 0.3, "lower head segment painted");
+    }
+
+    #[test]
+    fn spotlight_dims_outside_keeps_inside() {
+        let flat: Vec<f32> = std::iter::repeat_n([1.0f32, 1.0, 1.0, 1.0], 200 * 200).flatten().collect();
+        let img = TiledImage::from_flat_f32(Size::new(200, 200), &flat, hash_by_index);
+        let out = spotlight(&img, 60.0, 60.0, 80.0, 80.0, 0.0, 0.5, Rgba8::rgb(0, 0, 0), 0.0, &hash_by_index);
+        assert!(out.pixel(100, 100)[0] > 0.99, "inside the window stays bright");
+        let o = out.pixel(10, 10);
+        assert!((o[0] - 0.5).abs() < 0.05, "outside dimmed ~50% by the veil: {o:?}");
     }
 
     #[test]

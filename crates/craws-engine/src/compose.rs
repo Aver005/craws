@@ -155,6 +155,102 @@ fn justified_layout(sizes: &[Size], opts: CollageOptions) -> (Size, Vec<craws_do
     (canvas, rects)
 }
 
+// ── diff / compare ───────────────────────────────────────────────────────────
+
+/// How [`diff`] visualizes two images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffView {
+    /// Per-channel absolute difference (dark where identical).
+    Difference,
+    /// `a` dimmed to gray, differing pixels glowing red by magnitude.
+    Heatmap,
+    /// `a` and `b` laid side by side with a small gap (any sizes).
+    SideBySide,
+}
+
+/// Numeric comparison returned alongside a [`diff`] visualization. `None` when
+/// the two images differ in size (not directly comparable).
+#[derive(Debug, Clone, Copy)]
+pub struct DiffStats {
+    /// Fraction of pixels differing beyond the threshold (0..1).
+    pub fraction: Option<f32>,
+    /// Largest per-channel sRGB8 difference seen (0..1).
+    pub max: Option<f32>,
+}
+
+/// Compare two images: a visualization plus a change metric. `Difference` and
+/// `Heatmap` require equal sizes (the caller enforces it); `SideBySide` accepts
+/// any. The metric is computed whenever the sizes match.
+pub fn diff(a: &TiledImage, b: &TiledImage, view: DiffView, threshold: f32) -> (TiledImage, DiffStats) {
+    let stats = if a.size() == b.size() {
+        diff_stats(a, b, threshold)
+    } else {
+        DiffStats { fraction: None, max: None }
+    };
+    let img = match view {
+        DiffView::SideBySide => side_by_side(a, b),
+        DiffView::Difference => per_channel_map(a, b, |da, _| da as u8),
+        DiffView::Heatmap => heatmap(a, b),
+    };
+    (img, stats)
+}
+
+fn diff_stats(a: &TiledImage, b: &TiledImage, threshold: f32) -> DiffStats {
+    let (a8, b8) = (a.to_srgb_rgba8(), b.to_srgb_rgba8());
+    let thr = (threshold.clamp(0.0, 1.0) * 255.0) as i32;
+    let (mut count, mut maxd) = (0u64, 0i32);
+    for (pa, pb) in a8.chunks_exact(4).zip(b8.chunks_exact(4)) {
+        let d = (0..3).map(|c| (pa[c] as i32 - pb[c] as i32).abs()).max().unwrap();
+        if d > thr {
+            count += 1;
+        }
+        maxd = maxd.max(d);
+    }
+    let n = (a8.len() / 4) as f32;
+    DiffStats { fraction: Some(count as f32 / n), max: Some(maxd as f32 / 255.0) }
+}
+
+/// Build a same-size image whose channels are `f(abs_diff, magnitude)`.
+fn per_channel_map(a: &TiledImage, b: &TiledImage, f: impl Fn(i32, i32) -> u8 + Sync) -> TiledImage {
+    let (a8, b8) = (a.to_srgb_rgba8(), b.to_srgb_rgba8());
+    let mut out = vec![0u8; a8.len()];
+    for (o, (pa, pb)) in out.chunks_exact_mut(4).zip(a8.chunks_exact(4).zip(b8.chunks_exact(4))) {
+        let m = (0..3).map(|c| (pa[c] as i32 - pb[c] as i32).abs()).max().unwrap();
+        for (c, slot) in o[..3].iter_mut().enumerate() {
+            *slot = f((pa[c] as i32 - pb[c] as i32).abs(), m);
+        }
+        o[3] = 255;
+    }
+    TiledImage::from_srgb_rgba8(a.size(), &out, hash::digest_bytes(&out))
+}
+
+fn heatmap(a: &TiledImage, b: &TiledImage) -> TiledImage {
+    let (a8, b8) = (a.to_srgb_rgba8(), b.to_srgb_rgba8());
+    let mut out = vec![0u8; a8.len()];
+    for (o, (pa, pb)) in out.chunks_exact_mut(4).zip(a8.chunks_exact(4).zip(b8.chunks_exact(4))) {
+        let gray = (0.299 * pa[0] as f32 + 0.587 * pa[1] as f32 + 0.114 * pa[2] as f32) * 0.35;
+        let m = (0..3).map(|c| (pa[c] as i32 - pb[c] as i32).abs()).max().unwrap() as f32;
+        let fade = 1.0 - m / 255.0;
+        o[0] = (gray + m).min(255.0) as u8;
+        o[1] = (gray * fade).max(0.0) as u8;
+        o[2] = (gray * fade).max(0.0) as u8;
+        o[3] = 255;
+    }
+    TiledImage::from_srgb_rgba8(a.size(), &out, hash::digest_bytes(&out))
+}
+
+fn side_by_side(a: &TiledImage, b: &TiledImage) -> TiledImage {
+    let gap = 8u32;
+    let (aw, ah) = (a.size().width, a.size().height);
+    let (bw, bh) = (b.size().width, b.size().height);
+    let (cw, ch) = (aw + gap + bw, ah.max(bh));
+    let bg = rgba8_to_linear_premul(Rgba8::rgb(20, 20, 20));
+    let flat: Vec<f32> = std::iter::repeat_n(bg, (cw * ch) as usize).flatten().collect();
+    let canvas = TiledImage::from_flat_f32(Size::new(cw, ch), &flat, hash_by_index);
+    let canvas = overlay(&canvas, a, 0, 0, 1.0);
+    overlay(&canvas, b, (aw + gap) as i32, 0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +318,29 @@ mod tests {
         for r in &rects {
             assert!(r.x + r.width <= 900, "cell {r:?} within width");
         }
+    }
+
+    #[test]
+    fn diff_identical_is_zero() {
+        let a = solid(64, 48, [0.5, 0.5, 0.5, 1.0]);
+        let (img, s) = diff(&a, &a, DiffView::Difference, 0.0);
+        assert_eq!(img.size(), Size::new(64, 48));
+        assert_eq!(s.fraction, Some(0.0));
+        assert_eq!(s.max, Some(0.0));
+        assert_eq!(img.pixel(10, 10), [0.0, 0.0, 0.0, 1.0], "identical → black difference");
+    }
+
+    #[test]
+    fn diff_detects_change_and_lays_out_side_by_side() {
+        let a = solid(50, 50, [0.0, 0.0, 0.0, 1.0]);
+        let b = solid(50, 50, [1.0, 1.0, 1.0, 1.0]);
+        let (_, s) = diff(&a, &b, DiffView::Heatmap, 0.0);
+        assert_eq!(s.fraction, Some(1.0), "every pixel changed");
+        assert!(s.max.unwrap() > 0.99);
+        // side-by-side of different sizes: width = aw + gap + bw, metric absent
+        let c = solid(30, 40, [0.2, 0.2, 0.2, 1.0]);
+        let (img, s) = diff(&a, &c, DiffView::SideBySide, 0.0);
+        assert_eq!(img.size(), Size::new(50 + 8 + 30, 50), "side-by-side canvas");
+        assert!(s.fraction.is_none(), "different sizes → no metric");
     }
 }

@@ -1,10 +1,13 @@
 # .memories INDEX
-> Agent entry point. If you were handed this project cold, START HERE. Last updated: 2026-07-06
+> Agent entry point. If you were handed this project cold, START HERE. Last updated: 2026-07-08
 > (M0 engine+CLI, M1 MCP server wired into pooprusteek, M2 Tauri+React spike — ALL shipped.
-> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened: annotation + composition + **text**
-> (draw_text: ab_glyph glyph masks, embedded Cascadia, font-by-name via fontdb in the port). 80 tests
-> pass per-crate; ⚠️ workspace clippy + text visual demo unverified (dev box out of commit memory —
-> see STATE). Skill SOURCE is `skills/craws-mcp/` (installed `~/.claude/skills` is off-limits)).
+> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened to **26 MCP tools**: annotation + text +
+> composition, then geometry (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/
+> spotlight/beautify — new `filter.rs`), compare (diff+metric), meta (run_pipeline). **109 tests;
+> clippy `--all-targets -D warnings` = 0 across domain+engine+mcp+cli** (commit-memory gap CLOSED via
+> `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0`). ⚠️ latent compose index-hash bug (`BUGS.md`);
+> visual demo of the new ops still owed. Skill SOURCE is `skills/craws-mcp/` (installed
+> `~/.claude/skills` is off-limits)).
 
 > `CLAUDE.md` at the repo root is the auto-loaded bridge into this folder for Claude Code.
 > Other agents must be told to read `.memories/INDEX.md` first.
@@ -37,8 +40,11 @@ polish-phase item; it shapes every design decision from day one. Concretely:
 | 6 | `CONVENTIONS.md` | Code style + discipline to follow when editing |
 | 7 | `JOURNAL/` | Dated log of sessions and decisions |
 
+### Also present
+| `BUGS.md` | Known defects (currently: compose index-hashing collision risk) |
+
 ### Appear later (create when there is content, not before)
-`GLOSSARY.md` · `BUGS.md` · `LEARNINGS.md` · `reference/` (deep dives: ENGINE, BRIDGE, MCP…)
+`GLOSSARY.md` · `LEARNINGS.md` · `reference/` (deep dives: ENGINE, BRIDGE, MCP…)
 
 ## 2. KEY SIGNALS
 

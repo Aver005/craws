@@ -125,19 +125,45 @@ fn fmt_ms(d: Duration) -> String {
     format!("{:>9.1} ms", d.as_secs_f64() * 1000.0)
 }
 
-const OPS_HELP: &str = r#"pipeline.json: { "version": 0, "steps": [ <op>, ... ] }
+const OPS_HELP: &str = r##"pipeline.json: { "version": 0, "steps": [ <op>, ... ] }
 
 ops:
-  resize      { "op": "resize", "width": 1600, "height": null, "filter": "lanczos3" }
-              at least one of width/height; the other preserves aspect ratio
-              filters: nearest | bilinear | catmull_rom | lanczos3 (default)
-  crop        { "op": "crop", "x": 0, "y": 0, "width": 800, "height": 600 }
-              rect must lie fully inside the image
-  exposure    { "op": "exposure", "stops": 0.5 }
-              photographic stops, linear-light multiply by 2^stops
-  grayscale   { "op": "grayscale" }
-              Rec.709 relative luminance, computed in linear light
-"#;
+  resize       { "op": "resize", "width": 1600, "height": null, "filter": "lanczos3" }
+               at least one of width/height; the other preserves aspect ratio
+               filters: nearest | bilinear | catmull_rom | lanczos3 (default)
+  crop         { "op": "crop", "x": 0, "y": 0, "width": 800, "height": 600 }
+               rect must lie fully inside the image
+  rotate       { "op": "rotate", "degrees": 90, "expand": true }
+               clockwise; 90° steps lossless, other angles resample; expand grows the canvas
+  flip         { "op": "flip", "axis": "horizontal" }
+               axis: horizontal | vertical
+  pad          { "op": "pad", "left": 20, "right": 20, "top": 20, "bottom": 20, "color": "#00000000" }
+               extend the canvas; color hex/name, default transparent
+  exposure     { "op": "exposure", "stops": 0.5 }
+               photographic stops, linear-light multiply by 2^stops
+  grayscale    { "op": "grayscale" }
+               Rec.709 relative luminance, computed in linear light
+  hue_rotate   { "op": "hue_rotate", "degrees": 120 }
+               rotate hue about the luma axis (luminance-preserving), in linear light
+  invert       { "op": "invert" }
+               photographic negative, in perceptual sRGB space
+  blur         { "op": "blur", "radius": 6 }
+               separable Gaussian; radius ≈ sigma in pixels
+  redact       { "op": "redact", "x": 40, "y": 60, "width": 200, "height": 40, "mode": { "type": "pixelate", "block": 12 } }
+               obscure a region — mode: pixelate{block} | blur{radius} | fill{color}
+  spotlight    { "op": "spotlight", "x": 100, "y": 80, "width": 300, "height": 200, "dim": 0.6, "corner_radius": 12 }
+               dim everything outside the window (color/feather optional)
+  beautify     { "op": "beautify", "padding": 64, "corner_radius": 16, "shadow_radius": 24, "shadow_opacity": 0.35 }
+               round corners + soft drop shadow + padded background (grows by 2·padding)
+  draw_rect    { "op": "draw_rect", "x": 40, "y": 40, "width": 200, "height": 120, "corner_radius": 8, "stroke": "#ff3030", "stroke_width": 4 }
+               optional fill and/or stroke; rounded corners; colors hex/name
+  draw_ellipse { "op": "draw_ellipse", "x": 300, "y": 200, "width": 140, "height": 140, "stroke": "yellow" }
+               circle when width==height; optional fill and/or stroke
+  draw_line    { "op": "draw_line", "x1": 0, "y1": 0, "x2": 100, "y2": 60, "color": "white", "thickness": 3 }
+  draw_arrow   { "op": "draw_arrow", "x1": 10, "y1": 10, "x2": 180, "y2": 90, "color": "#00a0ff", "head_length": 18 }
+  draw_text    { "op": "draw_text", "x": 20, "y": 40, "text": "Step 1", "color": "#111", "font_size": 24, "align_x": "left" }
+               font is a file path (the engine stays deterministic) or omit for the built-in; \n starts a new line
+"##;
 
 #[cfg(test)]
 mod tests {

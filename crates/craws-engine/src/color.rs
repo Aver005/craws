@@ -41,6 +41,22 @@ pub fn linear_to_srgb8(v: f32) -> u8 {
     (e * 255.0 + 0.5) as u8
 }
 
+/// Linear-light → sRGB gamma as a float (no quantization). For ops that must
+/// compute in perceptual space (e.g. invert) and return to linear. Clamps to
+/// [0, 1] — inverting HDR headroom isn't meaningful.
+#[inline]
+pub fn linear_to_srgb_f32(v: f32) -> f32 {
+    let c = v.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// sRGB gamma → linear-light as a float.
+#[inline]
+pub fn srgb_to_linear_f32(v: f32) -> f32 {
+    let c = v.clamp(0.0, 1.0);
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

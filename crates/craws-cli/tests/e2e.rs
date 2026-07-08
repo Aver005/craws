@@ -117,7 +117,11 @@ fn ops_lists_every_op() {
     let out = craws().arg("ops").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for op in ["resize", "crop", "exposure", "grayscale"] {
+    for op in [
+        "resize", "crop", "rotate", "flip", "pad", "exposure", "grayscale",
+        "hue_rotate", "invert", "blur", "redact", "spotlight", "beautify",
+        "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "draw_text",
+    ] {
         assert!(stdout.contains(op), "missing {op}");
     }
 }

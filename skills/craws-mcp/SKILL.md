@@ -1,17 +1,22 @@
 ---
 name: craws-mcp
 description: >-
-  Drive the craws image MCP server to annotate, compose, and transform images —
-  above all, screenshots for documentation. Use this whenever you need to draw
-  arrows, circles, rectangles, lines, or translucent highlights on an image; add
-  a text label or caption; point at or mark up a UI element in a screenshot;
-  redact/censor a region; overlay one image on another; build a multi-image
-  collage or figure; or crop, resize, adjust exposure, or grayscale an image with
-  craws. Trigger it for requests like "annotate this screenshot", "circle the
-  login button", "add an arrow pointing to the menu", "label this step", "caption
-  the figure", "make a collage of these screenshots", "mark this up for the docs",
-  "blur out the API key", or any flow that pairs Playwright / browser screenshots
-  with image editing — even if the user never says "craws".
+  Drive the craws image MCP server to annotate, compose, transform, and compare
+  images — above all, screenshots for documentation. Use this whenever you need to
+  draw arrows, circles, rectangles, lines, or translucent highlights on an image;
+  add a text label or caption; point at or mark up a UI element; redact/censor a
+  region (pixelate, blur, or black-bar); blur, rotate, flip, crop, pad, or
+  auto-trim whitespace; spotlight a region by dimming the rest; polish/"beautify" a
+  shot with rounded corners, a drop shadow, and a padded background; overlay one
+  image on another; build a multi-image collage; adjust exposure, hue, invert, or
+  grayscale; diff two images (with a change metric) for visual regression; or run a
+  whole edit pipeline in one call. Trigger it for requests like "annotate this
+  screenshot", "circle the login button", "add an arrow to the menu", "label this
+  step", "blur out the API key", "black-bar the email", "trim the whitespace",
+  "round the corners and add a shadow", "make this look nice for the docs",
+  "spotlight the toolbar", "make a collage", "compare before and after", "rotate
+  this", or any flow pairing Playwright / browser screenshots with image
+  editing — even if the user never says "craws".
 ---
 
 # Using the craws image MCP
@@ -54,9 +59,17 @@ handle's current size.
 3. **Compose** if you have several images (`overlay`, `collage`).
 4. **Export** the final handle to a file (`export`; format follows the extension).
 
-Single-image edits (`resize`, `crop`, `exposure`, `grayscale`, the five `draw_*`
-including `draw_text`) each take one `image_id` and return one. `overlay` and
-`collage` take several handles and return one.
+There are **26 tools** in two families:
+
+- **Single-image ops** — take one `image_id`, return one (chain them):
+  - transform: `resize` `crop` `rotate` `flip` `pad` `trim` `exposure` `grayscale` `hue_rotate` `invert`
+  - filter: `blur` `redact` `spotlight` `beautify`
+  - annotation: `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` `draw_text`
+- **Multi-image / meta ops**:
+  - `overlay` `collage` take several handles → one; `diff` compares two → a visualization **plus a
+    change metric**; `run_pipeline` applies a whole JSON chain of the single-image ops in one call.
+
+Plus I/O: `open_image`, `image_info`, `export`.
 
 ## Coordinates: pixels, top-left origin — and where to get them
 
@@ -99,9 +112,12 @@ light), so `#22c55e55` is a real 33%-opacity green wash you can lay over content
   outline, use a translucent `fill` (e.g. `#facc5533`).
 - **Circle an icon → `draw_ellipse`** with a `stroke`; equal `width`/`height`
   draws a perfect circle. Great for small round targets (avatars, status dots).
-- **Redact a secret → `draw_rect`** with an **opaque** `fill` (`black`, or a solid
-  brand color) over the region. (A blur op isn't available yet — a solid bar is the
-  reliable redaction.)
+- **Redact a secret → `redact`** over the region. `mode:"pixelate"` (default) is the
+  safest censor — the value is gone, and unlike blur it can't be de-blurred; tune
+  `block` for cell size. `mode:"fill"` paints a solid bar (`color`, default black);
+  `mode:"blur"` softens (`radius`) — looks nice but is weaker, avoid it for true
+  secrets. Prefer `redact` over a `draw_rect` fill: it's purpose-built and reads as
+  a redaction.
 - **Underline / connector → `draw_line`.**
 - **Label / caption a step → `draw_text`.** Anchor at `(x, y)`; control how the text
   sits on that point with `align_x` (`left`/`center`/`right`) and `align_y`
@@ -130,6 +146,43 @@ outline/arrow on top, so the callout reads clearly.
   `background` (a color). Order of `image_ids` is the reading order. Ideal for a
   "here are the three screens" figure without hand-placing anything.
 
+## Transform, filter & polish recipes
+
+- **Trim whitespace → `trim`.** Auto-crops a uniform border (white margins, a solid
+  background, or transparency). By default it reads the background from the top-left
+  pixel; pass `color` to force one, and bump `tolerance` (0..1) for JPEG/anti-aliased
+  edges. The inverse of `pad` (which *adds* a margin, any `color`, `all` for uniform).
+- **Rotate / mirror → `rotate` / `flip`.** `rotate` is clockwise `degrees` (90° steps
+  are lossless; `expand:true`, the default, grows the canvas so nothing clips). `flip`
+  takes `axis:"horizontal"|"vertical"`.
+- **Blur → `blur`** (`radius` ≈ strength). Whole-image; for a *region* use `redact`
+  with `mode:"blur"`.
+- **Spotlight a region → `spotlight`.** Dims everything *outside* the rectangle so the
+  eye lands on it — great for "look here" in a busy UI. `dim` is the veil strength
+  (0..1, default 0.55); `corner_radius` and `feather` soften the window. Opposite
+  intent to a highlight box: darken the surroundings instead of outlining the target.
+- **Polish a screenshot → `beautify`.** One call adds rounded corners + a soft drop
+  shadow + a padded background (`padding`, `corner_radius`, `shadow_*`, `background`).
+  The output **grows by `2·padding`**. Default `background` is transparent (export png)
+  — set a color for a solid card. This is the "make my raw screenshot look designed"
+  button; do it **last**, after any annotation.
+- **Recolor → `hue_rotate`** (shift hue by `degrees`, luminance preserved) or
+  **`invert`** (photographic negative — handy for a quick dark-mode mock).
+
+## Compare & automate
+
+- **Diff two images → `diff`.** Returns a visualization handle **and a change metric**:
+  `fraction_changed` (0..1) and `max_difference` (0..1). `view:"heatmap"` (default)
+  glows changed pixels red over a dimmed base; `"difference"` is the raw per-channel
+  delta; `"side_by_side"` lays them out with a gap. `difference`/`heatmap` need the two
+  images to be the **same size**; `side_by_side` accepts any. Use the metric for visual
+  regression ("did this UI change?" → assert `fraction_changed` is near 0).
+- **Run a whole chain → `run_pipeline`.** Pass `pipeline` as a JSON array of op objects
+  (or `{"steps":[...]}`) to apply many single-image ops in one call — e.g.
+  `[{"op":"trim"},{"op":"resize","width":1200},{"op":"beautify","padding":48}]`. Same
+  op names/params as the pipeline format (see `references/tools.md`). Great for
+  normalizing a batch of shots identically.
+
 ## Export
 
 `export` picks the format from the file extension:
@@ -154,6 +207,14 @@ outline/arrow on top, so the callout reads clearly.
   both to force exact (possibly stretched) dimensions.
 - **DPR on retina screenshots** — scale Playwright boxes by the device pixel ratio.
 - **jpeg + transparency** — transparency goes white; use png/webp to keep it.
+- **Redaction strength** — `pixelate`/`fill` destroy the value; `blur` only softens it.
+  Never `blur` a real secret; pixelate or bar it.
+- **`diff` size rule** — `difference`/`heatmap` require both images the same size (else
+  a clean error); use `side_by_side` for mismatched sizes.
+- **`beautify` / `pad` grow the image** — output is bigger (beautify: +`2·padding`).
+  Do `beautify` *last*, and re-read the size (`image_info`) before placing anything else.
+- **`trim` needs a border** — a single-color image gives a "nothing to trim" error; and
+  it detects the background from the **top-left pixel** unless you pass `color`.
 
 Tool errors (bad handle, out-of-bounds crop, unknown color, unsupported extension)
 come back as normal tool errors with a readable message — they don't kill the
@@ -180,5 +241,6 @@ export      {image_id:"img-4", path:"step-1-signin.png"}            → done
 - `references/tools.md` — every tool, every parameter, defaults, return shape, and
   error conditions. Read it when you need an exact signature.
 - `references/cookbook.md` — extended recipes: the full Playwright → craws → Outline
-  documentation pipeline, numbered-step callouts, before/after plates, redaction,
-  batch-processing many screenshots, and resizing for a target doc width.
+  documentation pipeline, numbered-step callouts, before/after plates, redaction
+  (pixelate/bar), **beautify** a hero screenshot, **diff** for visual regression,
+  **run_pipeline** to normalize a batch, and resizing for a target doc width.

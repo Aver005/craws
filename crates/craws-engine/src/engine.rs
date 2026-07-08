@@ -94,6 +94,46 @@ impl Engine {
                 OpSpec::Resize { filter, .. } => self.run_global(&cur, out_size, op, |img, hash_fn| {
                     ops::resize(img, out_size, filter, hash_fn)
                 }),
+                OpSpec::Rotate { degrees, expand } => self.run_global(&cur, out_size, op, |img, hash_fn| {
+                    ops::rotate(img, out_size, degrees, expand, hash_fn)
+                }),
+                OpSpec::Flip { axis } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| ops::flip(img, axis, hash_fn))
+                }
+                OpSpec::Pad { left, top, color, .. } => self.run_global(&cur, out_size, op, |img, hash_fn| {
+                    ops::pad(img, out_size, left, top, color, hash_fn)
+                }),
+                // color: pointwise
+                OpSpec::HueRotate { degrees } => {
+                    let m = ops::hue_matrix(degrees);
+                    self.run_pointwise(&cur, op, move |t| ops::hue_rotate(t, &m))
+                }
+                OpSpec::Invert => self.run_pointwise(&cur, op, ops::invert),
+                // filter: whole-image / region
+                OpSpec::Blur { radius } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| crate::filter::blur(img, radius, hash_fn))
+                }
+                OpSpec::Redact { x, y, width, height, mode } => self.run_global(&cur, out_size, op, |img, hash_fn| {
+                    crate::filter::redact(img, x, y, width, height, mode, hash_fn)
+                }),
+                OpSpec::Spotlight { x, y, width, height, corner_radius, dim, color, feather } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        draw::spotlight(img, x, y, width, height, corner_radius, dim, color, feather, hash_fn)
+                    })
+                }
+                OpSpec::Beautify { padding, corner_radius, shadow_radius, shadow_opacity, shadow_offset, background } => {
+                    let params = crate::filter::BeautifyParams {
+                        padding,
+                        corner_radius,
+                        shadow_radius,
+                        shadow_opacity,
+                        shadow_offset,
+                        background,
+                    };
+                    self.run_global(&cur, out_size, op, |img, hash_fn| {
+                        crate::filter::beautify(img, out_size, &params, hash_fn)
+                    })
+                }
                 // annotation ops: same size, only bbox tiles recompute (inside draw)
                 OpSpec::DrawRect { x, y, width, height, corner_radius, fill, stroke, stroke_width } => {
                     self.run_global(&cur, out_size, op, |img, hash_fn| {
@@ -238,7 +278,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::hash::digest_bytes;
-    use craws_domain::{Filter, Size};
+    use craws_domain::{Filter, FlipAxis, RedactMode, Rgba8, Size};
 
     /// Deterministic sRGB test image spanning several tiles.
     fn test_image(w: u32, h: u32, seed: &[u8]) -> TiledImage {
@@ -316,6 +356,46 @@ mod tests {
         let img = TiledImage::from_flat_f32(size, &flat, |i| digest_bytes(&i.to_le_bytes()));
         let (out, _) = engine.run(&img, &pipeline(vec![OpSpec::Exposure { stops: 1.0 }])).unwrap();
         assert_eq!(out.pixel(5, 5), [0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn geometry_ops_run_and_cache() {
+        let engine = Engine::new();
+        let img = test_image(500, 300, b"geo");
+        let p = pipeline(vec![
+            OpSpec::Rotate { degrees: 90.0, expand: true },
+            OpSpec::Flip { axis: FlipAxis::Horizontal },
+            OpSpec::Pad { left: 8, right: 8, top: 8, bottom: 8, color: Rgba8::new(0, 0, 0, 0) },
+        ]);
+        // 500×300 --rot90--> 300×500 --flip--> 300×500 --pad8--> 316×516
+        let (out1, s1) = engine.run(&img, &p).unwrap();
+        assert_eq!(out1.size(), Size::new(316, 516));
+        assert!(s1.total_computed() > 0);
+
+        let (out2, s2) = engine.run(&img, &p).unwrap();
+        assert_eq!(s2.total_computed(), 0, "second run fully cached");
+        assert_eq!(out1.to_srgb_rgba8(), out2.to_srgb_rgba8(), "deterministic geometry chain");
+    }
+
+    #[test]
+    fn color_and_filter_chain_runs_and_caches() {
+        let engine = Engine::new();
+        let img = test_image(400, 300, b"cf");
+        let p = pipeline(vec![
+            OpSpec::HueRotate { degrees: 45.0 },
+            OpSpec::Invert,
+            OpSpec::Blur { radius: 2.0 },
+            OpSpec::Redact { x: 20.0, y: 20.0, width: 60.0, height: 40.0, mode: RedactMode::Fill { color: Rgba8::rgb(0, 0, 0) } },
+            OpSpec::Spotlight { x: 100.0, y: 100.0, width: 120.0, height: 90.0, corner_radius: 8.0, dim: 0.5, color: Rgba8::rgb(0, 0, 0), feather: 4.0 },
+            OpSpec::Beautify { padding: 20, corner_radius: 12.0, shadow_radius: 8.0, shadow_opacity: 0.3, shadow_offset: 6.0, background: Rgba8::new(0, 0, 0, 0) },
+        ]);
+        let (out1, s1) = engine.run(&img, &p).unwrap();
+        assert_eq!(out1.size(), Size::new(440, 340), "beautify adds 2·padding");
+        assert!(s1.total_computed() > 0);
+
+        let (out2, s2) = engine.run(&img, &p).unwrap();
+        assert_eq!(s2.total_computed(), 0, "second run fully cached");
+        assert_eq!(out1.to_srgb_rgba8(), out2.to_srgb_rgba8(), "deterministic color+filter chain");
     }
 
     #[test]
