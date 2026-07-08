@@ -59,11 +59,13 @@ handle's current size.
 3. **Compose** if you have several images (`overlay`, `collage`).
 4. **Export** the final handle to a file (`export`; format follows the extension).
 
-There are **26 tools** in two families:
+There are **34 tools** in two families:
 
 - **Single-image ops** — take one `image_id`, return one (chain them):
-  - transform: `resize` `crop` `rotate` `flip` `pad` `trim` `exposure` `grayscale` `hue_rotate` `invert`
-  - filter: `blur` `redact` `spotlight` `beautify`
+  - transform: `resize` `crop` `rotate` `flip` `pad` `trim` `exposure` `grayscale`
+  - color/tone: `hue_rotate` `invert` `brightness_contrast` `saturation` `levels` `curves`
+    `white_balance` `gradient_map`
+  - filter: `blur` `sharpen` `vignette` `redact` `spotlight` `beautify`
   - annotation: `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` `draw_text`
 - **Multi-image / meta ops**:
   - `overlay` `collage` take several handles → one; `diff` compares two → a visualization **plus a
@@ -168,6 +170,12 @@ outline/arrow on top, so the callout reads clearly.
   button; do it **last**, after any annotation.
 - **Recolor → `hue_rotate`** (shift hue by `degrees`, luminance preserved) or
   **`invert`** (photographic negative — handy for a quick dark-mode mock).
+- **Color-grade → `brightness_contrast` / `saturation` / `levels` / `curves` /
+  `white_balance` / `gradient_map`.** Photo-editor tone tools (in sRGB): add punch with
+  a `curves` S-curve (`points:[[0,0],[0.25,0.18],[0.75,0.82],[1,1]]`), warm a shot with
+  `white_balance`, or apply a duotone/sepia with `gradient_map` (low→high colors).
+  `sharpen` (unsharp) crisps a downscaled screenshot; `vignette` darkens the edges to
+  pull the eye to the center.
 
 ## Compare & automate
 

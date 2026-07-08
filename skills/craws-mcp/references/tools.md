@@ -9,7 +9,8 @@ hex (`#RGB`, `#RRGGBB`, `#RRGGBBAA`) or a name
 ## Contents
 - [Session & I/O](#session--io): open_image, image_info, export
 - [Transforms](#transforms): resize, crop, rotate, flip, pad, trim, exposure, grayscale, hue_rotate, invert
-- [Filters](#filters): blur, redact, spotlight, beautify
+- [Color & tone](#color--tone): brightness_contrast, saturation, levels, curves, white_balance, gradient_map
+- [Filters](#filters): blur, sharpen, vignette, redact, spotlight, beautify
 - [Annotation](#annotation): draw_rect, draw_ellipse, draw_line, draw_arrow, draw_text
 - [Composition & compare](#composition--compare): overlay, collage, diff
 - [Meta](#meta): run_pipeline
@@ -159,6 +160,68 @@ Alpha is preserved.
 
 ---
 
+## Color & tone
+
+Single-image, size-preserving. These are **color grades** — authored in perceptual
+sRGB (like a photo editor), except `white_balance` (linear channel gains). Alpha kept.
+
+### `brightness_contrast`
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `brightness` | float | no | 0 | additive, ~ -1..1 |
+| `contrast` | float | no | 0 | S-curve around mid-gray, ~ -1..1 |
+
+### `saturation`
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `amount` | float | yes | 1 = identity, 0 = grayscale, >1 boosts |
+
+### `levels`
+Remap tones per channel: pull in the black/white points, bend the midtones (gamma),
+and set the output range. Omitted fields are identity.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `in_black` | float | no | 0 | input black point (0..1) |
+| `in_white` | float | no | 1 | input white point (0..1) |
+| `gamma` | float | no | 1 | >1 brightens midtones, <1 darkens |
+| `out_black` | float | no | 0 | output black |
+| `out_white` | float | no | 1 | output white |
+
+### `curves`
+Arbitrary tone curve from control points.
+
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `points` | array of `[x, y]` | yes | 0..1, sorted by x; e.g. `[[0,0],[0.25,0.18],[1,1]]` (an S-curve for punch) |
+
+Applied per channel in sRGB; between points the curve is linear, outside it holds flat.
+
+### `white_balance`
+Warm/cool and green/magenta correction, as **linear** per-channel gains.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `temperature` | float | no | 0 | blue↔amber, ~ -1..1; positive = warmer |
+| `tint` | float | no | 0 | green↔magenta, ~ -1..1 |
+
+### `gradient_map`
+Map each pixel's luminance to a color gradient — duotone, sepia, heatmap, split-tone.
+
+| param | type | required | notes |
+|---|---|---|---|
+| `image_id` | string | yes | |
+| `low` | color | yes | color for the darkest tones |
+| `high` | color | yes | color for the brightest tones |
+| `mid` | color | no | optional midtone color (3-stop gradient) |
+
+---
+
 ## Filters
 
 Single-image, size-preserving (except `beautify`). Composited in linear light.
@@ -172,6 +235,25 @@ Whole-image Gaussian blur.
 | `radius` | float | yes | blur strength ≈ Gaussian sigma in px (0 = no-op) |
 
 For a *region only*, use `redact` with `mode:"blur"`.
+
+### `sharpen`
+Unsharp mask (`in + amount·(in − blur(in))`), in linear light.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `amount` | float | no | 1 | strength (0 = no-op) |
+| `radius` | float | no | 2 | blur sigma of the mask |
+
+### `vignette`
+Radial darkening toward `color` (default black), for focus.
+
+| param | type | required | default | notes |
+|---|---|---|---|---|
+| `image_id` | string | yes | | |
+| `amount` | float | no | 0.5 | strength 0..1 |
+| `feather` | float | no | 0.5 | softness 0..1 (higher = falloff starts nearer the center) |
+| `color` | color | no | black | color to darken toward |
 
 ### `redact`
 Obscure a rectangular region — the secret-hiding tool. Size unchanged.

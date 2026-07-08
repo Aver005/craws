@@ -1,12 +1,14 @@
 # .memories INDEX
 > Agent entry point. If you were handed this project cold, START HERE. Last updated: 2026-07-08
 > (M0 engine+CLI, M1 MCP server wired into pooprusteek, M2 Tauri+React spike — ALL shipped.
-> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened to **26 MCP tools**: annotation + text +
-> composition, then geometry (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/
-> spotlight/beautify — new `filter.rs`), compare (diff+metric), meta (run_pipeline). Then a fix+perf
-> pass: compose index-hash bug FIXED (content-addressed), blur rewritten tile-row banded/streaming,
-> beautify shadow 1-channel. **111 tests; clippy `--all-targets -D warnings` = 0 across
-> domain+engine+mcp+cli** (commit-memory gap CLOSED via `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0`).
+> BLAZING pass #1 (resize 6× + SIMD jpeg 2.4×). M1 broadened to **34 MCP tools** (26 OpSpec): annotation+
+> text+composition, geometry (rotate/flip/pad/trim), color/tone (hue_rotate/invert/brightness_contrast/
+> saturation/levels/curves/white_balance/gradient_map), filter (blur/sharpen/vignette/redact/spotlight/
+> beautify — new `filter.rs`), compare (diff+metric), meta (run_pipeline). Plus a fix+BLAZING pass:
+> compose index-hash bug FIXED (content-addressed); 16-bit encode LUT (export convert 24MP ~3×);
+> tile-direct blend+redact; blur tile-row banded/streaming; beautify shadow 1-channel. Tonal ops run in
+> perceptual sRGB (`ops::map_srgb`). **117 tests; clippy `--all-targets -D warnings` = 0 across
+> domain+engine+mcp+cli** (commit-memory workaround `-j1 CARGO_INCREMENTAL=0 RUSTFLAGS=-Cdebuginfo=0`).
 > No open bugs. Visual demo of the new ops still owed. Skill SOURCE is `skills/craws-mcp/` (installed
 > `~/.claude/skills` is off-limits)).
 

@@ -182,6 +182,98 @@ pub fn blur(
     TiledImage::new(size, bands.into_iter().flatten().collect())
 }
 
+/// Unsharp mask: `in + amount·(in − blur(in))`, in linear premultiplied light.
+/// `radius` is the blur sigma. `amount == 0` or `radius == 0` is a no-op.
+pub fn sharpen(
+    input: &TiledImage,
+    amount: f32,
+    radius: f32,
+    tile_hash: &(dyn Fn(u32) -> ContentHash + Sync),
+) -> TiledImage {
+    if amount == 0.0 || radius <= 0.0 {
+        return draw::clone_all(input, tile_hash);
+    }
+    let blurred = blur(input, radius, &|i| crate::hash::digest_bytes(&i.to_le_bytes()));
+    let (cols, rows) = grid_dims(input.size());
+    let tiles: Vec<TileRef> = (0..cols * rows)
+        .into_par_iter()
+        .map(|index| {
+            let it = &input.tiles()[index as usize].tile;
+            let bt = &blurred.tiles()[index as usize].tile;
+            let mut px = it.px.to_vec();
+            for (k, p) in px.iter_mut().enumerate() {
+                if k % 4 != 3 {
+                    *p += amount * (*p - bt.px[k]); // alpha (k%4==3) untouched
+                }
+            }
+            TileRef { hash: tile_hash(index), tile: Arc::new(Tile::new(it.width, it.height, px.into_boxed_slice())) }
+        })
+        .collect();
+    TiledImage::new(input.size(), tiles)
+}
+
+#[inline]
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a).max(1e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Source-over of premultiplied `s` at coverage `cov` onto premultiplied `d`.
+#[inline]
+fn over_cov(d: &mut [f32], s: &[f32; 4], cov: f32) {
+    let a_eff = s[3] * cov;
+    let inv = 1.0 - a_eff;
+    d[0] = s[0] * cov + d[0] * inv;
+    d[1] = s[1] * cov + d[1] * inv;
+    d[2] = s[2] * cov + d[2] * inv;
+    d[3] = a_eff + d[3] * inv;
+}
+
+/// Radial darkening toward `color` (default black): composite `color` over each
+/// pixel at coverage `amount · smoothstep(1−feather, 1, d)`, where `d` is the
+/// distance from center normalized so the corners sit at 1. Position-dependent ⇒
+/// a whole-image op (not per-tile-cacheable).
+pub fn vignette(
+    input: &TiledImage,
+    amount: f32,
+    feather: f32,
+    color: Rgba8,
+    tile_hash: &(dyn Fn(u32) -> ContentHash + Sync),
+) -> TiledImage {
+    if amount <= 0.0 {
+        return draw::clone_all(input, tile_hash);
+    }
+    let size = input.size();
+    let (cx, cy) = (size.width as f32 / 2.0, size.height as f32 / 2.0);
+    let max_r = (cx * cx + cy * cy).sqrt().max(1e-6);
+    let start = 1.0 - feather.clamp(0.0, 1.0);
+    let paint = rgba8_to_linear_premul(color);
+    let (cols, rows) = grid_dims(size);
+    let tiles: Vec<TileRef> = (0..cols * rows)
+        .into_par_iter()
+        .map(|index| {
+            let (col, row) = (index % cols, index / cols);
+            let (tw, th) = tile_dims(size, col, row);
+            let (ox0, oy0) = (col * TILE_SIZE, row * TILE_SIZE);
+            let mut px = input.tiles()[index as usize].tile.px.to_vec();
+            for ly in 0..th {
+                for lx in 0..tw {
+                    let dx = (ox0 + lx) as f32 + 0.5 - cx;
+                    let dy = (oy0 + ly) as f32 + 0.5 - cy;
+                    let d = (dx * dx + dy * dy).sqrt() / max_r;
+                    let cov = amount * smoothstep(start, 1.0, d);
+                    if cov > 0.0 {
+                        let off = ((ly * tw + lx) * 4) as usize;
+                        over_cov(&mut px[off..off + 4], &paint, cov);
+                    }
+                }
+            }
+            TileRef { hash: tile_hash(index), tile: Arc::new(Tile::new(tw, th, px.into_boxed_slice())) }
+        })
+        .collect();
+    TiledImage::new(size, tiles)
+}
+
 // ── redaction ────────────────────────────────────────────────────────────────
 
 /// Integer, image-clamped rect `(x0, y0, w, h)`, or `None` if it's off-canvas.
@@ -552,6 +644,33 @@ mod tests {
         // but a flat ramp blurs to ~itself; assert the op ran (still finite & near-x)
         let inside = out.pixel(48, 8)[0];
         assert!(inside.is_finite() && (inside - 48.0).abs() < 4.0, "blurred ramp near original: {inside}");
+    }
+
+    #[test]
+    fn sharpen_overshoots_edges() {
+        // hard vertical edge (0.2 | 0.8); unsharp overshoots both sides at the seam
+        let (w, h) = (64u32, 16u32);
+        let mut flat = vec![0.0f32; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let o = ((y * w + x) * 4) as usize;
+                flat[o] = if x >= w / 2 { 0.8 } else { 0.2 };
+                flat[o + 3] = 1.0;
+            }
+        }
+        let img = TiledImage::from_flat_f32(Size::new(w, h), &flat, hash_by_index);
+        let out = sharpen(&img, 1.0, 2.0, &hash_by_index);
+        assert!(out.pixel(32, 8)[0] > 0.8, "bright side overshoots up: {}", out.pixel(32, 8)[0]);
+        assert!(out.pixel(31, 8)[0] < 0.2, "dark side overshoots down: {}", out.pixel(31, 8)[0]);
+        assert_eq!(sharpen(&img, 0.0, 2.0, &hash_by_index).pixel(10, 8), img.pixel(10, 8), "amount 0 = no-op");
+    }
+
+    #[test]
+    fn vignette_darkens_corners_keeps_center() {
+        let img = solid(200, 200, [1.0, 1.0, 1.0, 1.0]);
+        let out = vignette(&img, 0.8, 0.8, Rgba8::rgb(0, 0, 0), &hash_by_index);
+        assert!(out.pixel(100, 100)[0] > 0.95, "center stays bright");
+        assert!(out.pixel(2, 2)[0] < 0.6, "corner darkened: {}", out.pixel(2, 2)[0]);
     }
 
     #[test]

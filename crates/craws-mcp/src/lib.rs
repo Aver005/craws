@@ -378,6 +378,94 @@ pub struct RunPipelineParams {
     pub pipeline: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrightnessContrastParams {
+    pub image_id: String,
+    /// Additive brightness in sRGB, ~ -1..1 (default 0).
+    #[serde(default)]
+    pub brightness: Option<f32>,
+    /// Contrast around mid-gray, ~ -1..1 (default 0).
+    #[serde(default)]
+    pub contrast: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SaturationParams {
+    pub image_id: String,
+    /// 1 = identity, 0 = grayscale, >1 boosts.
+    pub amount: f32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LevelsParams {
+    pub image_id: String,
+    #[serde(default)]
+    pub in_black: Option<f32>,
+    #[serde(default)]
+    pub in_white: Option<f32>,
+    #[serde(default)]
+    pub gamma: Option<f32>,
+    #[serde(default)]
+    pub out_black: Option<f32>,
+    #[serde(default)]
+    pub out_white: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CurvesParams {
+    pub image_id: String,
+    /// Control points `[x, y]` in 0..1, sorted by x. e.g. `[[0,0],[0.25,0.15],[1,1]]` (an S-curve).
+    pub points: Vec<[f32; 2]>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WhiteBalanceParams {
+    pub image_id: String,
+    /// Blue↔amber, ~ -1..1 (default 0). Positive = warmer.
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Green↔magenta, ~ -1..1 (default 0).
+    #[serde(default)]
+    pub tint: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GradientMapParams {
+    pub image_id: String,
+    /// Color for dark tones (hex/name).
+    pub low: String,
+    /// Color for bright tones (hex/name).
+    pub high: String,
+    /// Optional midtone color (hex/name) for a 3-stop gradient.
+    #[serde(default)]
+    pub mid: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SharpenParams {
+    pub image_id: String,
+    /// Strength (default 1).
+    #[serde(default)]
+    pub amount: Option<f32>,
+    /// Blur radius/sigma for the unsharp mask (default 2).
+    #[serde(default)]
+    pub radius: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct VignetteParams {
+    pub image_id: String,
+    /// Darkening strength 0..1 (default 0.5).
+    #[serde(default)]
+    pub amount: Option<f32>,
+    /// Softness 0..1 (default 0.5); higher starts the falloff closer to center.
+    #[serde(default)]
+    pub feather: Option<f32>,
+    /// Color to darken toward (hex/name, default black).
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
 // ── tools ───────────────────────────────────────────────────────────────────
 
 #[tool_router]
@@ -683,6 +771,81 @@ impl Craws {
                     background,
                 },
             )
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    // ── tonal / color grade ──
+    #[tool(description = "Adjust brightness and/or contrast (perceptual sRGB, ~ -1..1 each). Returns a new handle.")]
+    fn brightness_contrast(&self, Parameters(p): Parameters<BrightnessContrastParams>) -> Result<CallToolResult, McpError> {
+        self.session
+            .apply(&p.image_id, OpSpec::BrightnessContrast { brightness: p.brightness.unwrap_or(0.0), contrast: p.contrast.unwrap_or(0.0) })
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Adjust saturation: amount 1 = identity, 0 = grayscale, >1 boosts. Returns a new handle.")]
+    fn saturation(&self, Parameters(p): Parameters<SaturationParams>) -> Result<CallToolResult, McpError> {
+        self.session.apply(&p.image_id, OpSpec::Saturation { amount: p.amount }).map(ref_result).map_err(to_mcp)
+    }
+
+    #[tool(description = "Levels remap: input black/white points, gamma, output black/white (0..1, in sRGB). \
+                          Omitted fields default to identity. Returns a new handle.")]
+    fn levels(&self, Parameters(p): Parameters<LevelsParams>) -> Result<CallToolResult, McpError> {
+        self.session
+            .apply(
+                &p.image_id,
+                OpSpec::Levels {
+                    in_black: p.in_black.unwrap_or(0.0),
+                    in_white: p.in_white.unwrap_or(1.0),
+                    gamma: p.gamma.unwrap_or(1.0),
+                    out_black: p.out_black.unwrap_or(0.0),
+                    out_white: p.out_white.unwrap_or(1.0),
+                },
+            )
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Apply a tone curve from control points [x,y] in 0..1 (e.g. an S-curve for punch). Returns a new handle.")]
+    fn curves(&self, Parameters(p): Parameters<CurvesParams>) -> Result<CallToolResult, McpError> {
+        self.session.apply(&p.image_id, OpSpec::Curves { points: p.points }).map(ref_result).map_err(to_mcp)
+    }
+
+    #[tool(description = "White balance via temperature (blue↔amber) and tint (green↔magenta), ~ -1..1. Returns a new handle.")]
+    fn white_balance(&self, Parameters(p): Parameters<WhiteBalanceParams>) -> Result<CallToolResult, McpError> {
+        self.session
+            .apply(&p.image_id, OpSpec::WhiteBalance { temperature: p.temperature.unwrap_or(0.0), tint: p.tint.unwrap_or(0.0) })
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Map luminance to a color gradient: low (dark) → optional mid → high (bright). \
+                          Duotone / heatmap / sepia looks. Returns a new handle.")]
+    fn gradient_map(&self, Parameters(p): Parameters<GradientMapParams>) -> Result<CallToolResult, McpError> {
+        let low = parse_color(&p.low)?;
+        let high = parse_color(&p.high)?;
+        let mid = parse_color_opt(p.mid.as_deref())?;
+        self.session.apply(&p.image_id, OpSpec::GradientMap { low, high, mid }).map(ref_result).map_err(to_mcp)
+    }
+
+    // ── more filters ──
+    #[tool(description = "Sharpen via unsharp mask: `amount` (default 1) and `radius` (default 2). Returns a new handle.")]
+    fn sharpen(&self, Parameters(p): Parameters<SharpenParams>) -> Result<CallToolResult, McpError> {
+        self.session
+            .apply(&p.image_id, OpSpec::Sharpen { amount: p.amount.unwrap_or(1.0), radius: p.radius.unwrap_or(2.0) })
+            .map(ref_result)
+            .map_err(to_mcp)
+    }
+
+    #[tool(description = "Vignette: radial darkening toward a color (default black). `amount` 0..1, `feather` 0..1. Returns a new handle.")]
+    fn vignette(&self, Parameters(p): Parameters<VignetteParams>) -> Result<CallToolResult, McpError> {
+        let color = match p.color.as_deref() {
+            Some(s) => parse_color(s)?,
+            None => Rgba8::rgb(0, 0, 0),
+        };
+        self.session
+            .apply(&p.image_id, OpSpec::Vignette { amount: p.amount.unwrap_or(0.5), feather: p.feather.unwrap_or(0.5), color })
             .map(ref_result)
             .map_err(to_mcp)
     }

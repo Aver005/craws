@@ -134,6 +134,33 @@ impl Engine {
                         crate::filter::beautify(img, out_size, &params, hash_fn)
                     })
                 }
+                // tonal / color-grade: pointwise
+                OpSpec::BrightnessContrast { brightness, contrast } => {
+                    self.run_pointwise(&cur, op, move |t| ops::brightness_contrast(t, brightness, contrast))
+                }
+                OpSpec::Saturation { amount } => self.run_pointwise(&cur, op, move |t| ops::saturation(t, amount)),
+                OpSpec::Levels { in_black, in_white, gamma, out_black, out_white } => self
+                    .run_pointwise(&cur, op, move |t| ops::levels(t, in_black, in_white, gamma, out_black, out_white)),
+                // curves holds a non-Copy Vec → re-borrow from `step`, build the LUT once
+                OpSpec::Curves { .. } => {
+                    let OpSpec::Curves { points } = step else { unreachable!() };
+                    let lut = ops::build_curve_lut(points);
+                    self.run_pointwise(&cur, op, move |t| ops::apply_curve(t, &lut))
+                }
+                OpSpec::WhiteBalance { temperature, tint } => {
+                    let gains = ops::white_balance_gains(temperature, tint);
+                    self.run_pointwise(&cur, op, move |t| ops::white_balance(t, gains))
+                }
+                OpSpec::GradientMap { low, high, mid } => {
+                    self.run_pointwise(&cur, op, move |t| ops::gradient_map(t, low, high, mid))
+                }
+                // more filters: whole-image
+                OpSpec::Sharpen { amount, radius } => {
+                    self.run_global(&cur, out_size, op, |img, hash_fn| crate::filter::sharpen(img, amount, radius, hash_fn))
+                }
+                OpSpec::Vignette { amount, feather, color } => self.run_global(&cur, out_size, op, |img, hash_fn| {
+                    crate::filter::vignette(img, amount, feather, color, hash_fn)
+                }),
                 // annotation ops: same size, only bbox tiles recompute (inside draw)
                 OpSpec::DrawRect { x, y, width, height, corner_radius, fill, stroke, stroke_width } => {
                     self.run_global(&cur, out_size, op, |img, hash_fn| {

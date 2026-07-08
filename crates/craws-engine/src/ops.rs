@@ -86,6 +86,134 @@ pub fn invert(t: &Tile) -> Tile {
     Tile::new(t.width, t.height, px.into_boxed_slice())
 }
 
+#[inline]
+fn lerpf(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Apply a per-pixel transform in perceptual sRGB: unpremultiply → sRGB →
+/// `f(straight sRGB rgb)` → linear → re-premultiply. Alpha and transparent pixels
+/// untouched. This is the space tonal ops (brightness/levels/curves/saturation/
+/// gradient-map) are authored in — matching photo-editor expectations.
+fn map_srgb(t: &Tile, f: impl Fn([f32; 3]) -> [f32; 3]) -> Tile {
+    let mut px = t.px.to_vec();
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3];
+        if a <= 0.0 {
+            continue;
+        }
+        let inv = 1.0 / a;
+        let s = [linear_to_srgb_f32(p[0] * inv), linear_to_srgb_f32(p[1] * inv), linear_to_srgb_f32(p[2] * inv)];
+        let o = f(s);
+        p[0] = srgb_to_linear_f32(o[0]) * a;
+        p[1] = srgb_to_linear_f32(o[1]) * a;
+        p[2] = srgb_to_linear_f32(o[2]) * a;
+    }
+    Tile::new(t.width, t.height, px.into_boxed_slice())
+}
+
+/// Additive `brightness` and a `contrast` S-curve around mid-gray, in sRGB.
+pub fn brightness_contrast(t: &Tile, brightness: f32, contrast: f32) -> Tile {
+    let slope = 1.0 + contrast;
+    map_srgb(t, move |c| {
+        let g = |x: f32| ((x - 0.5) * slope + 0.5 + brightness).clamp(0.0, 1.0);
+        [g(c[0]), g(c[1]), g(c[2])]
+    })
+}
+
+/// Saturation around Rec.601 luma (1 = identity, 0 = gray, >1 boosts), in sRGB.
+pub fn saturation(t: &Tile, amount: f32) -> Tile {
+    map_srgb(t, move |c| {
+        let l = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        let s = |x: f32| (l + (x - l) * amount).clamp(0.0, 1.0);
+        [s(c[0]), s(c[1]), s(c[2])]
+    })
+}
+
+/// Levels remap in sRGB: input black/white, gamma, output black/white (per channel).
+pub fn levels(t: &Tile, in_black: f32, in_white: f32, gamma: f32, out_black: f32, out_white: f32) -> Tile {
+    let span = (in_white - in_black).abs().max(1e-6);
+    let inv_gamma = 1.0 / gamma;
+    map_srgb(t, move |c| {
+        let f = |x: f32| {
+            let n = ((x - in_black) / span).clamp(0.0, 1.0);
+            (n.powf(inv_gamma) * (out_white - out_black) + out_black).clamp(0.0, 1.0)
+        };
+        [f(c[0]), f(c[1]), f(c[2])]
+    })
+}
+
+/// Build a 256-entry sRGB tone LUT from control points (x, y in 0..1). Sorted by x;
+/// piecewise-linear between points; held flat outside. Empty points ⇒ identity.
+pub fn build_curve_lut(points: &[[f32; 2]]) -> [f32; 256] {
+    let mut pts = points.to_vec();
+    pts.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut lut = [0.0f32; 256];
+    for (i, v) in lut.iter_mut().enumerate() {
+        let x = i as f32 / 255.0;
+        *v = if pts.is_empty() {
+            x
+        } else if x <= pts[0][0] {
+            pts[0][1]
+        } else if x >= pts[pts.len() - 1][0] {
+            pts[pts.len() - 1][1]
+        } else {
+            let k = pts.iter().position(|p| p[0] >= x).unwrap();
+            let (a, b) = (pts[k - 1], pts[k]);
+            let span = (b[0] - a[0]).max(1e-6);
+            lerpf(a[1], b[1], (x - a[0]) / span)
+        }
+        .clamp(0.0, 1.0);
+    }
+    lut
+}
+
+/// Apply a precomputed 256-entry tone LUT per channel, in sRGB.
+pub fn apply_curve(t: &Tile, lut: &[f32; 256]) -> Tile {
+    map_srgb(t, |c| {
+        let s = |x: f32| lut[(x.clamp(0.0, 1.0) * 255.0 + 0.5) as usize & 0xFF];
+        [s(c[0]), s(c[1]), s(c[2])]
+    })
+}
+
+/// Linear per-channel gains from temperature (blue↔amber) and tint (green↔magenta).
+pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
+    let k = 0.4;
+    [(1.0 + k * temperature).max(0.0), (1.0 - k * tint).max(0.0), (1.0 - k * temperature).max(0.0)]
+}
+
+/// Linear per-channel multiply (premultiplication-safe; alpha untouched, no clamp).
+pub fn white_balance(t: &Tile, gains: [f32; 3]) -> Tile {
+    let mut px = t.px.to_vec();
+    for p in px.chunks_exact_mut(4) {
+        p[0] *= gains[0];
+        p[1] *= gains[1];
+        p[2] *= gains[2];
+    }
+    Tile::new(t.width, t.height, px.into_boxed_slice())
+}
+
+/// Map each pixel's sRGB luminance through a `low → (mid) → high` color gradient.
+pub fn gradient_map(t: &Tile, low: Rgba8, high: Rgba8, mid: Option<Rgba8>) -> Tile {
+    let srgb = |c: Rgba8| [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
+    let (lo, hi) = (srgb(low), srgb(high));
+    let md = mid.map(srgb);
+    map_srgb(t, move |c| {
+        let l = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]).clamp(0.0, 1.0);
+        match md {
+            Some(m) if l < 0.5 => {
+                let u = l / 0.5;
+                [lerpf(lo[0], m[0], u), lerpf(lo[1], m[1], u), lerpf(lo[2], m[2], u)]
+            }
+            Some(m) => {
+                let u = (l - 0.5) / 0.5;
+                [lerpf(m[0], hi[0], u), lerpf(m[1], hi[1], u), lerpf(m[2], hi[2], u)]
+            }
+            None => [lerpf(lo[0], hi[0], l), lerpf(lo[1], hi[1], l), lerpf(lo[2], hi[2], l)],
+        }
+    })
+}
+
 /// Gather `rect` from the source grid into a fresh grid. Row-run copies: each
 /// output row is assembled from at most a few contiguous source spans.
 pub fn crop(
@@ -473,6 +601,45 @@ mod tests {
         // fully transparent stays untouched
         let out = invert(&Tile::solid(1, 1, [0.0, 0.0, 0.0, 0.0]));
         assert_eq!(out.px, Tile::solid(1, 1, [0.0, 0.0, 0.0, 0.0]).px);
+    }
+
+    #[test]
+    fn brightness_contrast_and_saturation() {
+        use crate::color::{linear_to_srgb8, srgb8_to_linear};
+        let mid = srgb8_to_linear(128);
+        let t = Tile::solid(1, 1, [mid, mid, mid, 1.0]);
+        assert!(linear_to_srgb8(brightness_contrast(&t, 0.2, 0.0).px[0]) > 128, "+brightness lifts");
+        let dark = srgb8_to_linear(80);
+        let td = Tile::solid(1, 1, [dark, dark, dark, 1.0]);
+        assert!(linear_to_srgb8(brightness_contrast(&td, 0.0, 0.5).px[0]) < 80, "+contrast darkens shadows");
+
+        // saturation 0 → equal channels; 1 → unchanged
+        let col = Tile::solid(1, 1, [srgb8_to_linear(200), srgb8_to_linear(60), srgb8_to_linear(60), 1.0]);
+        let g = saturation(&col, 0.0);
+        assert!((g.px[0] - g.px[1]).abs() < 1e-3 && (g.px[1] - g.px[2]).abs() < 1e-3, "gray: {:?}", &g.px[..3]);
+        let id = saturation(&col, 1.0);
+        for i in 0..3 {
+            assert!((id.px[i] - col.px[i]).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn levels_curves_wb_gradient() {
+        use crate::color::{linear_to_srgb8, srgb8_to_linear};
+        let mid = srgb8_to_linear(128);
+        let t = Tile::solid(1, 1, [mid, mid, mid, 1.0]);
+        // levels identity keeps 128; gamma 2 brightens midtones
+        assert_eq!(linear_to_srgb8(levels(&t, 0.0, 1.0, 1.0, 0.0, 1.0).px[0]), 128);
+        assert!(linear_to_srgb8(levels(&t, 0.0, 1.0, 2.0, 0.0, 1.0).px[0]) > 128, "gamma 2 brightens");
+        // curves: identity keeps; a lifting curve brightens
+        assert_eq!(linear_to_srgb8(apply_curve(&t, &build_curve_lut(&[[0.0, 0.0], [1.0, 1.0]])).px[0]), 128);
+        assert!(linear_to_srgb8(apply_curve(&t, &build_curve_lut(&[[0.0, 0.3], [1.0, 1.0]])).px[0]) > 128);
+        // white balance: warm boosts R over B
+        let wb = white_balance(&Tile::solid(1, 1, [0.5, 0.5, 0.5, 1.0]), white_balance_gains(0.5, 0.0));
+        assert!(wb.px[0] > wb.px[2], "warm: {:?}", &wb.px[..3]);
+        // gradient map black→red on a gray → toward red
+        let g = gradient_map(&t, Rgba8::rgb(0, 0, 0), Rgba8::rgb(255, 0, 0), None);
+        assert!(g.px[0] > g.px[1] && g.px[0] > g.px[2], "toward red: {:?}", &g.px[..3]);
     }
 
     #[test]

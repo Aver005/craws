@@ -1,33 +1,36 @@
 # STATE
 > Live project snapshot. Update on every meaningful change.
-> Last updated: 2026-07-08 — **toolset broadened 14 → 26 MCP tools** across two batches: geometry
-> (rotate/flip/pad/trim), color (hue_rotate/invert), filter (blur/redact/spotlight/beautify), compare
-> (diff + change metric), and meta (run_pipeline). New engine module `filter.rs`. Then a **fix + perf
-> pass**: the compose index-hashing bug is **FIXED** (content-addressed via `stamp` + `compose_signature`;
-> 2 regression tests), and a **BLAZING pass** — 16-bit encode LUT (export convert 24MP **106 → 36 ms, ~3×**,
-> no `powf`), tile-direct `blend` (overlay/collage, no per-pixel `pixel()`) + tile-direct redact region
-> reads, blur tile-row banded/streaming (no full-image flat copies), beautify shadow blurs 1 alpha channel.
-> **111 tests pass;
-> `cargo clippy --all-targets -- -D warnings` = 0 across domain+engine+mcp+cli** (build with
-> `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` for commit headroom on the
-> page-file-less box). No open bugs (`BUGS.md`). ⚠️ text/new-op visual demo still un-run.
+> Last updated: 2026-07-08 — **toolset broadened 14 → 34 MCP tools** (26 OpSpec variants) across four
+> batches: geometry (rotate/flip/pad/trim), color/tone (hue_rotate/invert/brightness_contrast/saturation/
+> levels/curves/white_balance/gradient_map), filter (blur/sharpen/vignette/redact/spotlight/beautify),
+> compare (diff+metric), meta (run_pipeline). New engine module `filter.rs`. Plus a **fix + BLAZING pass**:
+> compose index-hash bug **FIXED** (content-addressed via `stamp`+`compose_signature`; 2 regression tests);
+> 16-bit encode LUT (export convert 24MP **106 → 36 ms, ~3×**, no `powf`); tile-direct `blend` + redact
+> region reads (no per-pixel `pixel()`); blur tile-row banded/streaming (no full-image flat); beautify
+> shadow 1-channel. Tonal ops run in perceptual sRGB (via `ops::map_srgb`, like invert); white_balance/
+> vignette in linear. **117 tests pass; `cargo clippy --all-targets -- -D warnings` = 0 across
+> domain+engine+mcp+cli** (build with `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"`
+> for commit headroom on the page-file-less box). No open bugs (`BUGS.md`). ⚠️ visual eyeball of the new
+> ops still owed.
 
 ## SNAPSHOT
 
 - **M0 core is live.** `craws run pipeline.json --in a.png --out b.webp` end-to-end: 24MP / 4-step
   pipeline now **~336 ms** (was 556; resize step 307→49 ms). Warm slider tweak on a 24MP chain =
   **11.8 ms**; fully-cached op = **85 µs**.
-- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). **26 tools**:
+- **M1 MCP server is live** (`crates/craws-mcp`, rmcp 2.1, stdio, protocol 2024-11-05). **34 tools**:
   - I/O: `open_image` `image_info` `export`
-  - transform (OpSpec): `resize` `crop` `rotate` `flip` `pad` `exposure` `grayscale` `hue_rotate` `invert`
-  - filter (OpSpec): `blur` `redact` `spotlight` `beautify`
+  - transform (OpSpec): `resize` `crop` `rotate` `flip` `pad` `exposure` `grayscale`
+  - color/tone (OpSpec, pointwise): `hue_rotate` `invert` `brightness_contrast` `saturation` `levels`
+    `curves` `white_balance` `gradient_map`
+  - filter (OpSpec): `blur` `sharpen` `vignette` `redact` `spotlight` `beautify`
   - annotation (OpSpec): `draw_rect` `draw_ellipse` `draw_line` `draw_arrow` `draw_text`
   - session-direct (multi-input / content-dependent / meta): `overlay` `collage` `trim` `diff` `run_pipeline`
 
   Image-handle session: each op returns a NEW immutable `image_id` (mirrors engine tiles), shared
   engine cache across the session. Wired **into pooprusteek** (`%APPDATA%\pooprusteek\mcp.json`,
-  entry `craws`; original backed up `.bak-craws`) — the 12 new tools appear automatically (schema is
-  discovered via `tools/list`).
+  entry `craws`; original backed up `.bak-craws`) — new tools appear automatically (schema is discovered
+  via `tools/list`).
 - **M1 killer feature shipped** (owner's doc-automation use case): annotate screenshots (arrows /
   circles / boxes / text) + **redact** secrets (pixelate/blur/black-bar) + **spotlight** a region +
   one-shot **beautify** (rounded corners + soft shadow + padded background) + **diff** two shots with a
@@ -111,7 +114,7 @@ channel) ~106 ms could use an encode LUT.
 | Check | Status |
 |-------|--------|
 | `cargo build --workspace` | Passes (per-crate; `craws-app` not rebuilt this session — untouched, no exhaustive `match OpSpec`) |
-| `cargo test` (per-crate) | **111 passing** (15 domain + 69 engine + 5 codecs + 1+4 cli + 17 mcp-lib/session + 5 mcp-stdio) |
+| `cargo test` (per-crate) | **117 passing** (17 domain + 73 engine + 5 codecs + 1+4 cli + 17 mcp-lib/session + 5 mcp-stdio) |
 | `cargo clippy --all-targets -- -D warnings` | **0 across domain + engine + mcp + cli** ✅ (gap CLOSED). On this page-file-less box use `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` for commit headroom |
 | Benches | `cargo bench -p craws-engine --bench engine` / `-p craws-codecs --bench codecs` |
 | CI | `[DONE]` — **single** `.github/workflows/ci.yml` (staged, no 2nd workflow / no duplicated Build) + `.gitlab-ci.yml` (mirror, already one staged pipeline). Flow: PR / main → `gate` (clippy `-D warnings`·test·bench-compile, **Linux-only**) + `app` (Tauri shell); develop → gate+app → `release-build` (3 OS) → `publish`. **fmt NOT gated.** Rolling `v<ver>-dev` release ships CLI (`craws`+`craws-mcp`) **and** installers (nsis/dmg/deb+appimage). Shared notes: `scripts/dev-release.template.md` + `render-release-notes.sh` |
@@ -123,11 +126,12 @@ channel) ~106 ms could use an encode LUT.
 M0, M1 (broadened to 26 tools), M2-spike all done. Next candidates (owner's call):
 1. **M3 — the editor**: build the real UI on the proven spike (properties panel, linear-chains UI,
    design tokens). Promote spike ad-hoc pieces to infra (tauri-specta, tile streaming, mip base).
-2. **Finish the tool menu** — owner is picking from a lettered ~24-option list. DONE so far:
-   A rotate · B flip · C pad · D trim · G hue_rotate · K invert · M blur · Q redact · R spotlight ·
-   S beautify · T diff · U run_pipeline. REMAINING letters: E brightness/contrast · F saturation/vibrance ·
-   H levels · I curves · J white_balance · L gradient_map/duotone · N sharpen/unsharp · O pixelate
-   (standalone) · P vignette · V background_removal (AI, `craws-ai`+ort) · W watermark · X device_frame.
+2. **Finish the tool menu** — owner is picking from a lettered ~24-option list. DONE (20): A rotate ·
+   B flip · C pad · D trim · E brightness_contrast · F saturation · G hue_rotate · H levels · I curves ·
+   J white_balance · K invert · L gradient_map · M blur · N sharpen · P vignette · Q redact · R spotlight ·
+   S beautify · T diff · U run_pipeline. REMAINING (4): **O** pixelate-standalone (overlaps `redact
+   mode:pixelate` — low value) · **V** background_removal (AI, needs `craws-ai`+ort — the big one) ·
+   **W** watermark (overlay+text combo) · **X** device_frame (browser/phone chrome mockup).
    Text follow-ups still open: word-wrap (`max_width`), text background/outline, richer shaping.
 3. **BLAZING debt** — pass #1 resize 6× + jpeg 2.4×; pass #2 blur/beautify de-alloc; **pass #3
    (2026-07-08): encode LUT (convert ~3×), tile-direct `blend` + redact region reads** (`content_bounds`/

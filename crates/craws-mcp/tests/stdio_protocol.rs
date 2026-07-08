@@ -129,6 +129,8 @@ fn handshake_lists_tools_and_runs_a_batch() {
         "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "draw_text", "overlay", "collage",
         "rotate", "flip", "pad", "trim",
         "hue_rotate", "invert", "blur", "redact", "spotlight", "beautify", "diff", "run_pipeline",
+        "brightness_contrast", "saturation", "levels", "curves", "white_balance", "gradient_map",
+        "sharpen", "vignette",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}; got {names:?}");
     }
@@ -281,6 +283,18 @@ fn color_filter_and_meta_over_the_wire() {
     // a bad redact mode is a clean tool error
     let msg = c.call_expect_error("redact", json!({ "image_id": id, "x": 0, "y": 0, "width": 10, "height": 10, "mode": "scramble" }));
     assert!(msg.to_lowercase().contains("mode") || msg.to_lowercase().contains("pixelate"), "redact mode error: {msg}");
+
+    // tonal grade over the wire (all size-preserving)
+    let bc = c.call_ok("brightness_contrast", json!({ "image_id": id, "brightness": 0.1, "contrast": 0.2 }));
+    assert_eq!((bc["width"].as_u64(), bc["height"].as_u64()), (Some(200), Some(150)));
+    let sat = c.call_ok("saturation", json!({ "image_id": bc["image_id"], "amount": 1.4 }));
+    let lv = c.call_ok("levels", json!({ "image_id": sat["image_id"], "gamma": 1.2 }));
+    let cv = c.call_ok("curves", json!({ "image_id": lv["image_id"], "points": [[0, 0], [0.5, 0.62], [1, 1]] }));
+    let wb = c.call_ok("white_balance", json!({ "image_id": cv["image_id"], "temperature": 0.3 }));
+    let gm = c.call_ok("gradient_map", json!({ "image_id": wb["image_id"], "low": "#101020", "high": "#f0e0c0" }));
+    let sh = c.call_ok("sharpen", json!({ "image_id": gm["image_id"], "amount": 1.0 }));
+    let vg = c.call_ok("vignette", json!({ "image_id": sh["image_id"], "amount": 0.5 }));
+    assert_eq!((vg["width"].as_u64(), vg["height"].as_u64()), (Some(200), Some(150)), "tonal chain keeps size");
 }
 
 #[test]

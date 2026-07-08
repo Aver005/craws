@@ -44,6 +44,12 @@ compose index-hashing bug is FIXED (content-addressed via `stamp`/`compose_signa
 to tile-row banded/streaming (no full-image flat; ~495 ms @ 24MP σ8), beautify shadow blurs 1 channel.
 **111 tests; clippy `--all-targets -D warnings` = 0 across domain+engine+mcp+cli** (commit-memory gap
 closed via `-j1` + no-debuginfo). No open bugs. A visual eyeball of the new ops is still owed.
+
+Then the **tonal / color-grade batch** (2026-07-08, menu E,F,H,I,J,L,N,P → **34 tools, 26 OpSpec**):
+brightness_contrast, saturation, levels, curves, white_balance, gradient_map (pointwise; tonal ones in
+perceptual sRGB via `ops::map_srgb`, white_balance in linear) + sharpen (unsharp, reuses blur) + vignette
+(radial, positional→global). 117 tests, clippy 0. **Menu 20/24 done**; remaining O (pixelate-standalone,
+overlaps redact), V (bg-removal AI — needs `craws-ai`+ort), W (watermark), X (device_frame).
 Remaining menu letters (owner's call): E brightness/contrast, F saturation/vibrance, H levels, I curves,
 J white_balance, L gradient_map, N sharpen, O pixelate(standalone), P vignette, V bg-removal(AI),
 W watermark, X device_frame.

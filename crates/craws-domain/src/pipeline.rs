@@ -248,8 +248,78 @@ pub enum OpSpec {
         #[serde(default = "transparent")]
         background: Rgba8,
     },
+
+    // ── tonal / color-grade ops (single-input, pointwise; size unchanged) ──
+    /// Additive `brightness` and `contrast` (S-curve around mid-gray), in sRGB. 0 = identity.
+    BrightnessContrast {
+        #[serde(default)]
+        brightness: f32,
+        #[serde(default)]
+        contrast: f32,
+    },
+    /// Saturation: 1 = identity, 0 = grayscale, >1 boosts. In sRGB (Rec.601 luma).
+    Saturation { amount: f32 },
+    /// Levels remap (per RGB, in sRGB): input black/white points, gamma, output black/white.
+    Levels {
+        #[serde(default)]
+        in_black: f32,
+        #[serde(default = "one")]
+        in_white: f32,
+        #[serde(default = "one")]
+        gamma: f32,
+        #[serde(default)]
+        out_black: f32,
+        #[serde(default = "one")]
+        out_white: f32,
+    },
+    /// Tone curve from control points `[x, y]` in 0..1 (per channel, in sRGB).
+    Curves { points: Vec<[f32; 2]> },
+    /// White balance as linear per-channel gains from `temperature` (blue↔amber)
+    /// and `tint` (green↔magenta). 0 / 0 = identity.
+    WhiteBalance {
+        #[serde(default)]
+        temperature: f32,
+        #[serde(default)]
+        tint: f32,
+    },
+    /// Map luminance to a gradient: `low` (dark) → optional `mid` → `high` (bright).
+    /// Duotone when `mid` is absent. In sRGB.
+    GradientMap {
+        low: Rgba8,
+        high: Rgba8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mid: Option<Rgba8>,
+    },
+
+    // ── more filters (single-input; size unchanged) ──
+    /// Unsharp mask: `in + amount·(in − blur(in))`, in linear light. `radius` is the blur sigma.
+    Sharpen {
+        #[serde(default = "one")]
+        amount: f32,
+        #[serde(default = "default_sharpen_radius")]
+        radius: f32,
+    },
+    /// Radial darkening toward `color` (default black): `amount` strength (0..1),
+    /// `feather` softness (0..1).
+    Vignette {
+        #[serde(default = "default_half")]
+        amount: f32,
+        #[serde(default = "default_half")]
+        feather: f32,
+        #[serde(default = "black")]
+        color: Rgba8,
+    },
 }
 
+fn one() -> f32 {
+    1.0
+}
+fn default_half() -> f32 {
+    0.5
+}
+fn default_sharpen_radius() -> f32 {
+    2.0
+}
 fn default_stroke_width() -> f32 {
     3.0
 }
@@ -315,12 +385,29 @@ impl OpSpec {
             OpSpec::Redact { .. } => "redact",
             OpSpec::Spotlight { .. } => "spotlight",
             OpSpec::Beautify { .. } => "beautify",
+            OpSpec::BrightnessContrast { .. } => "brightness_contrast",
+            OpSpec::Saturation { .. } => "saturation",
+            OpSpec::Levels { .. } => "levels",
+            OpSpec::Curves { .. } => "curves",
+            OpSpec::WhiteBalance { .. } => "white_balance",
+            OpSpec::GradientMap { .. } => "gradient_map",
+            OpSpec::Sharpen { .. } => "sharpen",
+            OpSpec::Vignette { .. } => "vignette",
         }
     }
 
     /// Validate against the incoming image size; return the outgoing size.
     pub fn output_size(&self, input: Size) -> Result<Size, PipelineError> {
         debug_assert!(!input.is_empty(), "engine never feeds empty images");
+        // `Curves` holds a non-Copy Vec — validate it by ref before the `match *self`.
+        if let OpSpec::Curves { points } = self {
+            for pt in points {
+                if !pt[0].is_finite() || !pt[1].is_finite() {
+                    return Err(PipelineError::NonFiniteParam { op: "curves", param: "points" });
+                }
+            }
+            return Ok(input);
+        }
         match *self {
             OpSpec::Resize { width, height, .. } => {
                 let out = match (width, height) {
@@ -422,6 +509,44 @@ impl OpSpec {
                     return Err(PipelineError::ResultTooLarge { op: "beautify" });
                 }
                 Ok(Size::new(w as u32, h as u32))
+            }
+
+            OpSpec::BrightnessContrast { brightness, contrast } => {
+                check_finite("brightness_contrast", &[brightness, contrast])?;
+                Ok(input)
+            }
+            OpSpec::Saturation { amount } => {
+                if !amount.is_finite() {
+                    return Err(PipelineError::NonFiniteParam { op: "saturation", param: "amount" });
+                }
+                Ok(input)
+            }
+            OpSpec::Levels { in_black, in_white, gamma, out_black, out_white } => {
+                check_finite("levels", &[in_black, in_white, gamma, out_black, out_white])?;
+                if gamma <= 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "levels" });
+                }
+                Ok(input)
+            }
+            OpSpec::Curves { .. } => Ok(input), // validated by ref above
+            OpSpec::WhiteBalance { temperature, tint } => {
+                check_finite("white_balance", &[temperature, tint])?;
+                Ok(input)
+            }
+            OpSpec::GradientMap { .. } => Ok(input),
+            OpSpec::Sharpen { amount, radius } => {
+                check_finite("sharpen", &[amount, radius])?;
+                if radius < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "sharpen" });
+                }
+                Ok(input)
+            }
+            OpSpec::Vignette { amount, feather, .. } => {
+                check_finite("vignette", &[amount, feather])?;
+                if amount < 0.0 || feather < 0.0 {
+                    return Err(PipelineError::NegativeParam { op: "vignette" });
+                }
+                Ok(input)
             }
 
             OpSpec::DrawRect { x, y, width, height, corner_radius, fill, stroke, stroke_width } => {
@@ -799,5 +924,47 @@ mod tests {
         // beautify defaults
         let op: OpSpec = serde_json::from_str(r#"{ "op": "beautify" }"#).unwrap();
         assert_eq!(op, OpSpec::Beautify { padding: 64, corner_radius: 16.0, shadow_radius: 24.0, shadow_opacity: 0.35, shadow_offset: 12.0, background: transparent() });
+    }
+
+    #[test]
+    fn tonal_ops_keep_size_and_validate() {
+        let img = px(200, 150);
+        for op in [
+            OpSpec::BrightnessContrast { brightness: 0.1, contrast: 0.2 },
+            OpSpec::Saturation { amount: 1.4 },
+            OpSpec::Levels { in_black: 0.05, in_white: 0.95, gamma: 1.2, out_black: 0.0, out_white: 1.0 },
+            OpSpec::Curves { points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]] },
+            OpSpec::WhiteBalance { temperature: 0.3, tint: -0.1 },
+            OpSpec::GradientMap { low: black(), high: Rgba8::rgb(255, 255, 255), mid: None },
+            OpSpec::Sharpen { amount: 1.0, radius: 2.0 },
+            OpSpec::Vignette { amount: 0.5, feather: 0.5, color: black() },
+        ] {
+            assert_eq!(op.output_size(img).unwrap(), img, "{} keeps size", op.name());
+        }
+        // rejections
+        assert!(matches!(OpSpec::Levels { in_black: 0.0, in_white: 1.0, gamma: 0.0, out_black: 0.0, out_white: 1.0 }.output_size(img), Err(PipelineError::NegativeParam { .. })), "gamma > 0");
+        assert!(matches!(OpSpec::Curves { points: vec![[f32::NAN, 0.0]] }.output_size(img), Err(PipelineError::NonFiniteParam { .. })));
+        assert!(matches!(OpSpec::Vignette { amount: -1.0, feather: 0.5, color: black() }.output_size(img), Err(PipelineError::NegativeParam { .. })));
+    }
+
+    #[test]
+    fn tonal_json_shapes_and_defaults() {
+        // brightness_contrast: both default to 0 (identity)
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "brightness_contrast", "contrast": 0.3 }"#).unwrap();
+        assert_eq!(op, OpSpec::BrightnessContrast { brightness: 0.0, contrast: 0.3 });
+        // levels: omitted fields default to identity
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "levels", "gamma": 1.5 }"#).unwrap();
+        assert_eq!(op, OpSpec::Levels { in_black: 0.0, in_white: 1.0, gamma: 1.5, out_black: 0.0, out_white: 1.0 });
+        // curves round-trips its points
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "curves", "points": [[0,0],[1,1]] }"#).unwrap();
+        assert_eq!(op.name(), "curves");
+        let back: OpSpec = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+        assert_eq!(op, back);
+        // gradient_map: mid optional
+        let op: OpSpec = serde_json::from_str(r#"{ "op": "gradient_map", "low": { "r": 0, "g": 0, "b": 0 }, "high": { "r": 255, "g": 255, "b": 255 } }"#).unwrap();
+        assert!(matches!(op, OpSpec::GradientMap { mid: None, .. }));
+        // sharpen / vignette defaults
+        assert_eq!(serde_json::from_str::<OpSpec>(r#"{ "op": "sharpen" }"#).unwrap(), OpSpec::Sharpen { amount: 1.0, radius: 2.0 });
+        assert_eq!(serde_json::from_str::<OpSpec>(r#"{ "op": "vignette" }"#).unwrap(), OpSpec::Vignette { amount: 0.5, feather: 0.5, color: black() });
     }
 }

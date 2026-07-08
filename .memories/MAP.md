@@ -10,13 +10,14 @@ crates/craws-domain/            ZERO-I/O core
   src/lib.rs                    re-exports
   src/color.rs                  Rgba8 (straight-alpha sRGB; alpha defaults to 255 in JSON)
   src/geometry.rs               Size, Rect (overflow-safe fits_in)
-  src/pipeline.rs               Pipeline + 18 OpSpec variants (serde `op`-tagged): resize/crop/rotate/
-                                flip/pad/exposure/grayscale/hue_rotate/invert/blur/redact/spotlight/
-                                beautify/draw_rect/ellipse/line/arrow/text. Enums Filter, AlignX/AlignY,
-                                FlipAxis, RedactMode (type-tagged pixelate|blur|fill). validation→sizes;
-                                rotated_size() (90° exact / bbox on expand). Errors incl. ResultTooLarge.
-                                NOTE: OpSpec has a non-Copy field (DrawText.text:String) → output_size
-                                uses `match *self` with `..` on that arm.
+  src/pipeline.rs               Pipeline + 26 OpSpec variants (serde `op`-tagged): resize/crop/rotate/
+                                flip/pad/exposure/grayscale/hue_rotate/invert/brightness_contrast/
+                                saturation/levels/curves/white_balance/gradient_map/blur/sharpen/vignette/
+                                redact/spotlight/beautify/draw_rect/ellipse/line/arrow/text. Enums Filter,
+                                AlignX/AlignY, FlipAxis, RedactMode. validation→sizes; rotated_size().
+                                Errors incl. ResultTooLarge. NOTE: two non-Copy fields (DrawText.text,
+                                Curves.points:Vec) → output_size validates Curves by-ref first, then
+                                `match *self` with `..` on those arms.
 
 crates/craws-engine/            the executor
   src/lib.rs                    re-exports + engine invariants doc
@@ -28,11 +29,12 @@ crates/craws-engine/            the executor
   src/hash.rs                   ContentHash + Merkle derivation (src/pw/gl/glt/cmp domains);
                                 compose_signature (params ⊕ input tile hashes) for multi-input ops
   src/cache.rs                  TileCache: LRU by byte budget (HashMap + BTreeMap recency)
-  src/ops.rs                    kernels: exposure, grayscale, hue_rotate (+hue_matrix, SVG luma-preserving),
-                                invert (perceptual sRGB), crop (row-run gather), resize (→resample),
-                                rotate (90° exact permute / bilinear inverse-map + sampler), flip,
-                                pad (solid canvas + row-run copy), content_bounds + trim (tight
-                                non-bg bbox → crop, content-derived hashes)
+  src/ops.rs                    kernels: exposure, grayscale, hue_rotate (+hue_matrix), invert, crop,
+                                resize (→resample), rotate (90° exact / bilinear+sampler), flip, pad,
+                                content_bounds+trim (content-derived hashes). Tonal (all via map_srgb —
+                                unpremult→sRGB→f→linear→premult): brightness_contrast, saturation, levels,
+                                curves (build_curve_lut 256-LUT + apply_curve), gradient_map;
+                                white_balance (+white_balance_gains, LINEAR per-channel multiply)
   src/resample.rs               own separable resampler: Contribs (precomputed per-output weights,
                                 filter-scaled for downsampling), horizontal (streams rows from tiles,
                                 no full flat src copy) + vertical passes, both rayon-parallel.
@@ -45,7 +47,9 @@ crates/craws-engine/            the executor
   src/filter.rs                 neighborhood ops: gaussian_blur_flat (used by blur_region) + blur1
                                 (1-channel, for the shadow) + blur (whole image, tile-row BANDED/
                                 STREAMING — streams source rows via copy_row_into, writes tiles direct,
-                                NO full-image flat); redact (pixelate/blur/fill a region, only rect
+                                NO full-image flat) + sharpen (unsharp = in+amount·(in−blur)) + vignette
+                                (radial darken toward color, positional→global, smoothstep+over_cov);
+                                redact (pixelate/blur/fill a region, only rect
                                 tiles recompute) via write_region; regions read tile-direct via
                                 read_region (row-run gather, no pixel()); opaque fill skips the source
                                 read; beautify (rounded corners + 1-channel soft drop-shadow + padded
@@ -94,9 +98,10 @@ crates/craws-mcp/               port #2: MCP server (rmcp 2.1, stdio, protocol 2
                                 +run_pipeline (whole Pipeline in one call). immutable "img-N" handles,
                                 shared Engine cache, SessionError (+NothingToTrim, +SizeMismatch)
   src/lib.rs                    rmcp wrapper: Craws { session, tool_router }, #[tool_router]/#[tool]
-                                (26 tools: I/O open/info/export; transform resize/crop/rotate/flip/pad/
-                                exposure/grayscale/hue_rotate/invert; filter blur/redact/spotlight/
-                                beautify; annotation draw_rect/ellipse/line/arrow/text; multi overlay/
+                                (34 tools: I/O open/info/export; transform resize/crop/rotate/flip/pad/
+                                exposure/grayscale; color/tone hue_rotate/invert/brightness_contrast/
+                                saturation/levels/curves/white_balance/gradient_map; filter blur/sharpen/
+                                vignette/redact/spotlight/beautify; annotation draw_*; multi overlay/
                                 collage/trim/diff/run_pipeline). parse_color/_align_x/_y/_axis/
                                 _redact_mode/_diff_view/_pipeline; #[tool_handler], get_info; results
                                 are JSON text (diff also returns fraction_changed/max_difference)

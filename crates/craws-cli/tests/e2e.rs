@@ -119,7 +119,9 @@ fn ops_lists_every_op() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     for op in [
         "resize", "crop", "rotate", "flip", "pad", "exposure", "grayscale",
-        "hue_rotate", "invert", "blur", "redact", "spotlight", "beautify",
+        "hue_rotate", "invert", "brightness_contrast", "saturation", "levels", "curves",
+        "white_balance", "gradient_map", "blur", "sharpen", "vignette",
+        "redact", "spotlight", "beautify",
         "draw_rect", "draw_ellipse", "draw_line", "draw_arrow", "draw_text",
     ] {
         assert!(stdout.contains(op), "missing {op}");

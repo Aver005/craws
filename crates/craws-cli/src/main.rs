@@ -147,8 +147,24 @@ ops:
                rotate hue about the luma axis (luminance-preserving), in linear light
   invert       { "op": "invert" }
                photographic negative, in perceptual sRGB space
+  brightness_contrast { "op": "brightness_contrast", "brightness": 0.05, "contrast": 0.2 }
+               additive brightness + S-curve contrast, in sRGB (~ -1..1 each)
+  saturation   { "op": "saturation", "amount": 1.3 }
+               1 = identity, 0 = grayscale, >1 boosts
+  levels       { "op": "levels", "in_black": 0.05, "in_white": 0.95, "gamma": 1.1 }
+               input/output black-white points + gamma, in sRGB (omitted = identity)
+  curves       { "op": "curves", "points": [[0,0],[0.25,0.18],[1,1]] }
+               tone curve from control points (x,y in 0..1), per channel, in sRGB
+  white_balance { "op": "white_balance", "temperature": 0.2, "tint": -0.1 }
+               temperature (blue↔amber) + tint (green↔magenta), linear gains
+  gradient_map { "op": "gradient_map", "low": "#101020", "high": "#f0e0c0", "mid": null }
+               map luminance to a low→(mid)→high gradient (duotone/heatmap)
   blur         { "op": "blur", "radius": 6 }
                separable Gaussian; radius ≈ sigma in pixels
+  sharpen      { "op": "sharpen", "amount": 1.0, "radius": 2 }
+               unsharp mask: in + amount·(in − blur(in)), in linear light
+  vignette     { "op": "vignette", "amount": 0.5, "feather": 0.5, "color": "#000000" }
+               radial darkening toward color (default black)
   redact       { "op": "redact", "x": 40, "y": 60, "width": 200, "height": 40, "mode": { "type": "pixelate", "block": 12 } }
                obscure a region — mode: pixelate{block} | blur{radius} | fill{color}
   spotlight    { "op": "spotlight", "x": 100, "y": 80, "width": 300, "height": 200, "dim": 0.6, "corner_radius": 12 }
